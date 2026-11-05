@@ -7,6 +7,8 @@
 //     [--eval script.js]     JS to run in the page first (may return a promise)
 //     [--song path.mp3]      hand this file to the upload screen's file input
 //     [--play 6000]          after --song, ms to wait once gameplay starts
+//     [--after script.js]    run verification after the screenshot; save returned PNGs/JSON
+//     [--verify true]        wait for tools/gl-bot.js to complete a full song
 //     [--scale 3]            nearest-neighbour upscale of the 384x216 canvas
 //     [--frames 1 --every 250]  capture several frames: out-0.png, out-1.png...
 //     [--port 9333]          DevTools port (use different ports in parallel)
@@ -14,9 +16,8 @@
 // The page's audio is not muted: run with the game volume down if needed.
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, all) => (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1]?.startsWith('--') ? 'true' : all[i + 1]]] : acc), []),
@@ -29,7 +30,10 @@ const frames = Number(args.frames ?? 1);
 const every = Number(args.every ?? 250);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const profile = mkdtempSync(join(tmpdir(), 'shot-chrome-'));
+mkdirSync(dirname(out), { recursive: true });
+mkdirSync('tools/out', { recursive: true });
+const profile = mkdtempSync(resolve('tools/out', 'shot-chrome-'));
+let connection;
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
   '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
   '--window-size=1152,648', '--autoplay-policy=no-user-gesture-required', '--mute-audio',
@@ -46,7 +50,7 @@ try {
     } catch {}
   }
   if (!pageWs) throw new Error('Chrome did not start');
-  const ws = new WebSocket(pageWs);
+  const ws = connection = new WebSocket(pageWs);
   await new Promise((r) => (ws.onopen = r));
   let id = 0;
   const pending = new Map();
@@ -106,9 +110,34 @@ try {
     console.log('wrote', file);
     if (k < frames - 1) await sleep(every);
   }
+  if (args.after) {
+    const result = await evaluate(readFileSync(args.after, 'utf8'));
+    for (const file of result.files ?? []) {
+      writeFileSync(join(dirname(out), basename(file.name)), Buffer.from(file.dataUrl.split(',')[1], 'base64'));
+    }
+    delete result.files;
+    writeFileSync(out.replace(/\.png$/, '-checks.json'), JSON.stringify(result, null, 2));
+    console.log('checks:', JSON.stringify(result));
+  }
+  if (args.verify === 'true') {
+    for (let i = 0; i < 1800; i++) {
+      const bot = await evaluate('window.__bot');
+      if (!bot) throw new Error('--verify needs --eval tools/gl-bot.js');
+      if (i % 80 === 0) console.log('bot:', JSON.stringify(bot));
+      if (bot.done) {
+        writeFileSync(out.replace(/\.png$/, '-playthrough.json'), JSON.stringify(bot, null, 2));
+        console.log('playthrough:', JSON.stringify(bot));
+        if (bot.outcome !== 'completed' || bot.score.perfectCount !== bot.notes || bot.score.missCount || bot.score.goodCount || bot.score.okCount) throw new Error('Full-perfect playthrough failed');
+        break;
+      }
+      if (i === 1799) throw new Error('Playthrough timed out');
+      await sleep(250);
+    }
+  }
   if (consoleLines.length) console.log(consoleLines.slice(0, 20).join('\n'));
   ws.close();
 } finally {
+  connection?.close();
   chrome.kill();
   await sleep(300);
   rmSync(profile, { recursive: true, force: true });

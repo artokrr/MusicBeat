@@ -1,8 +1,7 @@
 // Poses as a handful of angles, and the forward kinematics that turns them
 // into joint positions (see rig/joints.ts) for any renderer to draw.
-
+import { JOINT_NAMES } from '../rig/joints';
 import type { JointName, JointPose, Vec3 } from '../rig/joints';
-
 export interface ArmPose {
   /** Upper arm raised forward from hanging (radians). */
   swing: number;
@@ -11,7 +10,6 @@ export interface ArmPose {
   /** Upper arm raised out to the side. */
   spread: number;
 }
-
 export interface Pose {
   crouch: number;
   lean: number;
@@ -21,101 +19,93 @@ export interface Pose {
   armR: ArmPose;
   armL: ArmPose;
 }
-
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-const blendArm = (a: ArmPose, b: ArmPose, t: number): ArmPose => ({
-  swing: lerp(a.swing, b.swing, t),
-  bend: lerp(a.bend, b.bend, t),
-  spread: lerp(a.spread, b.spread, t),
-});
-
-export function blendPose(a: Pose, b: Pose, t: number): Pose {
-  return {
-    crouch: lerp(a.crouch, b.crouch, t),
-    lean: lerp(a.lean, b.lean, t),
-    stance: lerp(a.stance, b.stance, t),
-    twist: lerp(a.twist, b.twist, t),
-    armR: blendArm(a.armR, b.armR, t),
-    armL: blendArm(a.armL, b.armL, t),
-  };
+/** Optional outputs let renderer adapters keep their hot path allocation-free. */
+export function blendPose(a: Pose, b: Pose, t: number, out?: Pose): Pose {
+  out ??= { crouch: 0, lean: 0, stance: 0, twist: 0, armR: { swing: 0, bend: 0, spread: 0 }, armL: { swing: 0, bend: 0, spread: 0 } };
+  out.crouch = lerp(a.crouch, b.crouch, t);
+  out.lean = lerp(a.lean, b.lean, t);
+  out.stance = lerp(a.stance, b.stance, t);
+  out.twist = lerp(a.twist, b.twist, t);
+  out.armR.swing = lerp(a.armR.swing, b.armR.swing, t);
+  out.armR.bend = lerp(a.armR.bend, b.armR.bend, t);
+  out.armR.spread = lerp(a.armR.spread, b.armR.spread, t);
+  out.armL.swing = lerp(a.armL.swing, b.armL.swing, t);
+  out.armL.bend = lerp(a.armL.bend, b.armL.bend, t);
+  out.armL.spread = lerp(a.armL.spread, b.armL.spread, t);
+  return out;
 }
-
-const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const norm = (a: Vec3): Vec3 => {
-  const l = Math.hypot(a[0], a[1], a[2]) || 1;
-  return [a[0] / l, a[1] / l, a[2] / l];
-};
-
-/**
- * Joint positions for a person standing at (x, y) facing `yaw` (0 = +x,
- * pi/2 = +y) in `pose`. Slim adult proportions, about 1.78 m tall.
- */
-export function poseJoints(x: number, y: number, yaw: number, pose: Pose, cloth = { swingForward: 0, swingSide: 0 }): JointPose {
-  const fx = Math.cos(yaw);
-  const fy = Math.sin(yaw);
-  const sx = -fy;
-  const sy = fx;
-  // Local frame: a = forward, b = to the figure's left, z = up.
-  const P = (a: number, b: number, z: number): Vec3 => [x + fx * a + sx * b, y + fy * a + sy * b, z];
-  const ct = Math.cos(pose.twist);
-  const st = Math.sin(pose.twist);
-  const T = (a: number, b: number, z: number): Vec3 => P(a * ct - b * st, a * st + b * ct, z);
-
+export function createJointPose(): JointPose {
+  const joints = {} as Record<JointName, Vec3>;
+  for (const name of JOINT_NAMES)
+    joints[name] = [0, 0, 0];
+  return { joints, forward: [0, 0, 0], chestForward: [0, 0, 0], paddle: { center: [0, 0, 0], up: [0, 0, 0], normal: [0, 0, 0] }, cloth: { swingForward: 0, swingSide: 0 } };
+}
+function point(out: Vec3, a: number, b: number, z: number, x: number, y: number, fx: number, fy: number, sx: number, sy: number) {
+  out[0] = x + fx * a + sx * b;
+  out[1] = y + fy * a + sy * b;
+  out[2] = z;
+}
+function arm(j: JointPose['joints'], side: 1 | -1, a: ArmPose, x: number, y: number, fx: number, fy: number, sx: number, sy: number, shA: number, shZ: number) {
+  const shoulder = side === 1 ? j.shoulderL : j.shoulderR, elbow = side === 1 ? j.elbowL : j.elbowR;
+  const wrist = side === 1 ? j.wristL : j.wristR, hand = side === 1 ? j.handL : j.handR;
+  const outward = Math.sin(a.spread) * .3;
+  point(shoulder, shA, side * .2, shZ - .02, x, y, fx, fy, sx, sy);
+  point(elbow, shA + Math.sin(a.swing) * .3, side * (.2 + outward), shZ - .02 - Math.cos(a.swing) * .3 * Math.cos(a.spread), x, y, fx, fy, sx, sy);
+  const fore = a.swing + a.bend;
+  point(wrist, shA + Math.sin(a.swing) * .3 + Math.sin(fore) * .27, side * (.2 + outward), elbow[2] - Math.cos(fore) * .27, x, y, fx, fy, sx, sy);
+  const dx = wrist[0] - elbow[0], dy = wrist[1] - elbow[1], dz = wrist[2] - elbow[2], len = Math.hypot(dx, dy, dz) || 1;
+  hand[0] = wrist[0] + dx / len * .08;
+  hand[1] = wrist[1] + dy / len * .08;
+  hand[2] = wrist[2] + dz / len * .08;
+}
+const STILL_CLOTH = { swingForward: 0, swingSide: 0 };
+/** Same forward kinematics; an optional reusable output avoids transient vectors. */
+export function poseJoints(x: number, y: number, yaw: number, pose: Pose, cloth = STILL_CLOTH, out = createJointPose()): JointPose {
+  const fx = Math.cos(yaw), fy = Math.sin(yaw), sx = -fy, sy = fx;
+  const ct = Math.cos(pose.twist), st = Math.sin(pose.twist);
+  const tx = fx * ct + sx * st, ty = fy * ct + sy * st, ux = -fx * st + sx * ct, uy = -fy * st + sy * ct;
   const { crouch, lean, stance } = pose;
-  const hipZ = 0.93 - crouch * 0.12;
-  const shZ = hipZ + 0.5 * Math.cos(lean);
-  const shA = 0.5 * Math.sin(lean);
-
-  const j = {} as Record<JointName, Vec3>;
-  j.pelvis = P(0, 0, hipZ);
-  j.hipL = P(0, 0.09, hipZ);
-  j.hipR = P(0, -0.09, hipZ);
-  j.kneeL = P(0.13 + crouch * 0.1, stance * 0.8, 0.5 - crouch * 0.04);
-  j.kneeR = P(0.06 + crouch * 0.1, -stance * 0.8, 0.5 - crouch * 0.04);
-  j.ankleL = P(0.08, stance, 0.07);
-  j.ankleR = P(-0.06, -stance, 0.07);
-  j.toeL = P(0.22, stance, 0.03);
-  j.toeR = P(0.08, -stance, 0.03);
-  j.chest = T(shA * 0.8, 0, shZ - 0.12);
-  j.neck = T(shA, 0, shZ + 0.04);
-  j.head = T(shA + Math.sin(lean) * 0.12, 0, shZ + 0.2);
-  j.headTop = T(shA + Math.sin(lean) * 0.16, 0, shZ + 0.35);
-
-  const arm = (side: 1 | -1, a: ArmPose) => {
-    const upper = 0.3;
-    const lower = 0.27;
-    const outward = Math.sin(a.spread) * upper;
-    const shoulder = T(shA, side * 0.2, shZ - 0.02);
-    const elbow = T(shA + Math.sin(a.swing) * upper, side * (0.2 + outward), shZ - 0.02 - Math.cos(a.swing) * upper * Math.cos(a.spread));
-    const fore = a.swing + a.bend;
-    const wrist = T(shA + Math.sin(a.swing) * upper + Math.sin(fore) * lower, side * (0.2 + outward), elbow[2] - Math.cos(fore) * lower);
-    const d = norm(sub(wrist, elbow));
-    const hand: Vec3 = [wrist[0] + d[0] * 0.08, wrist[1] + d[1] * 0.08, wrist[2] + d[2] * 0.08];
-    return { shoulder, elbow, wrist, hand, d };
-  };
-  const left = arm(1, pose.armL);
-  const right = arm(-1, pose.armR);
-  j.shoulderL = left.shoulder;
-  j.elbowL = left.elbow;
-  j.wristL = left.wrist;
-  j.handL = left.hand;
-  j.shoulderR = right.shoulder;
-  j.elbowR = right.elbow;
-  j.wristR = right.wrist;
-  j.handR = right.hand;
-
-  // The paddle continues the forearm; its face turns to the figure's side.
-  const d = right.d;
-  const along = d[0] * sx + d[1] * sy;
-  const face = norm([sx - d[0] * along, sy - d[1] * along, -d[2] * along]);
-  const center: Vec3 = [right.wrist[0] + d[0] * 0.16, right.wrist[1] + d[1] * 0.16, right.wrist[2] + d[2] * 0.16];
-
-  return {
-    joints: j,
-    forward: [fx, fy, 0],
-    chestForward: [fx * ct + sx * st, fy * ct + sy * st, 0],
-    paddle: { center, up: d, normal: face },
-    cloth,
-  };
+  const hipZ = .93 - crouch * .12, shZ = hipZ + .5 * Math.cos(lean), shA = .5 * Math.sin(lean), j = out.joints;
+  point(j.pelvis, 0, 0, hipZ, x, y, fx, fy, sx, sy);
+  point(j.hipL, 0, .09, hipZ, x, y, fx, fy, sx, sy);
+  point(j.hipR, 0, -.09, hipZ, x, y, fx, fy, sx, sy);
+  point(j.kneeL, .13 + crouch * .1, stance * .8, .5 - crouch * .04, x, y, fx, fy, sx, sy);
+  point(j.kneeR, .06 + crouch * .1, -stance * .8, .5 - crouch * .04, x, y, fx, fy, sx, sy);
+  point(j.ankleL, .08, stance, .07, x, y, fx, fy, sx, sy);
+  point(j.ankleR, -.06, -stance, .07, x, y, fx, fy, sx, sy);
+  point(j.toeL, .22, stance, .03, x, y, fx, fy, sx, sy);
+  point(j.toeR, .08, -stance, .03, x, y, fx, fy, sx, sy);
+  point(j.chest, shA * .8, 0, shZ - .12, x, y, tx, ty, ux, uy);
+  point(j.neck, shA, 0, shZ + .04, x, y, tx, ty, ux, uy);
+  point(j.head, shA + Math.sin(lean) * .12, 0, shZ + .2, x, y, tx, ty, ux, uy);
+  point(j.headTop, shA + Math.sin(lean) * .16, 0, shZ + .35, x, y, tx, ty, ux, uy);
+  arm(j, 1, pose.armL, x, y, tx, ty, ux, uy, shA, shZ);
+  arm(j, -1, pose.armR, x, y, tx, ty, ux, uy, shA, shZ);
+  const wrist = j.wristR, elbow = j.elbowR, d = out.paddle.up;
+  const dx = wrist[0] - elbow[0], dy = wrist[1] - elbow[1], dz = wrist[2] - elbow[2], len = Math.hypot(dx, dy, dz) || 1;
+  d[0] = dx / len;
+  d[1] = dy / len;
+  d[2] = dz / len;
+  const along = d[0] * sx + d[1] * sy, n = out.paddle.normal;
+  n[0] = sx - d[0] * along;
+  n[1] = sy - d[1] * along;
+  n[2] = -d[2] * along;
+  const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+  n[0] /= nl;
+  n[1] /= nl;
+  n[2] /= nl;
+  const center = out.paddle.center;
+  center[0] = wrist[0] + d[0] * .16;
+  center[1] = wrist[1] + d[1] * .16;
+  center[2] = wrist[2] + d[2] * .16;
+  out.forward[0] = fx;
+  out.forward[1] = fy;
+  out.forward[2] = 0;
+  out.chestForward[0] = tx;
+  out.chestForward[1] = ty;
+  out.chestForward[2] = 0;
+  out.cloth.swingForward = cloth.swingForward;
+  out.cloth.swingSide = cloth.swingSide;
+  return out;
 }

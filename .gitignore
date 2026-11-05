@@ -29,3 +29,6 @@ server/uploads/
 # Cache
 .cache/
 *.tsbuildinfo
+
+# Local renderer verification artifacts
+tools/out/
