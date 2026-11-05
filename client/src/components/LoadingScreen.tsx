@@ -26,32 +26,45 @@ export default function LoadingScreen() {
       return;
     }
 
+    // A newer upload (or leaving this screen) supersedes this run: its results
+    // must not overwrite the newer song's beatmap or reopen gameplay.
+    let cancelled = false;
+    let startTimer: number | undefined;
+    const current = () => !cancelled && useGameStore.getState().audioBuffer === audioBuffer;
+
     const analyze = async () => {
       try {
         setWarning(null);
         setProgress(20);
 
         const analysis = await analyzeInBackground(audioBuffer);
+        if (!current()) return;
         if (analysis.usedFallback) {
           setWarning('simple mode');
         }
         setProgress(60);
 
         const beatmap = generateBeatmap(analysis);
+        if (!current()) return;
         setProgress(100);
 
         setBeatmap(beatmap);
 
-        setTimeout(() => {
-          setScreen('playing');
+        startTimer = window.setTimeout(() => {
+          if (current()) setScreen('playing');
         }, 500);
       } catch (error) {
+        if (!current()) return;
         console.error('Analysis failed:', error);
         setFailed(true);
       }
     };
 
     analyze();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(startTimer);
+    };
   }, [audioBuffer, setBeatmap, setScreen]);
 
   // Only interpolate the presentation; analysis and screen timing stay untouched.
