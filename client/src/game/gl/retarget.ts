@@ -14,7 +14,7 @@ function aimFrame(a: Vec3, b: Vec3, forward: Vec3, matrix: Matrix4, x: Vector3, 
     y.set(0, 0, 1);
   else
     y.multiplyScalar(1 / length);
-  z.set(...forward).addScaledVector(y, -y.dot(z));
+  z.set(forward[0], forward[1], forward[2]).addScaledVector(y, -y.dot(z));
   // Facing can coincide with a forearm/foot direction. A body-relative side
   // vector supplies a deterministic roll without NaNs or a random axis flip.
   if (z.lengthSq() < 1e-6)
@@ -70,8 +70,8 @@ export class PoseRetargeter {
   }
   update(pose: JointPose) {
     this.root.updateMatrixWorld(true);
-    for (const binding of this.bindings) {
-      const { def, bone, correction, restLength, scale } = binding;
+    for (let i = 0; i < this.bindings.length; i++) {
+      const { def, bone, correction, restLength, scale } = this.bindings[i];
       const a = pose.joints[def.from], b = pose.joints[def.to];
       const facing = def.name.startsWith('thigh') || def.name.startsWith('shin') || def.name.startsWith('foot') ? pose.forward : pose.chestForward;
       const length = aimFrame(a, b, facing, this.frame, this.x, this.y, this.z);

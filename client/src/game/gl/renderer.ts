@@ -5,6 +5,13 @@ import { CAMERA, VIEW_FORWARD } from '../scene/camera';
 import { buildCourtyard } from './geometry';
 import { Figure, PrimitiveBatch } from './figures';
 import { GPUTimer } from './timing';
+import { AuthoredCourtyard } from './props';
+import { PaddleBatch } from './paddles';
+import { lampLevel } from './lamp';
+import { WorldSnow } from './weather';
+import { Breath } from './breath';
+import { Footprints } from './footprints';
+import { lampUniform, pixelNoise } from './material';
 import type { Vec3 } from '../rig/joints';
 import type { SceneBackend, SceneFrame } from '../scene/types';
 const near = .1, far = 40, distance = 20;
@@ -13,9 +20,12 @@ const outlineFragment = /* glsl */ `
  uniform sampler2D colorMap;
  uniform sampler2D surfaceMap;
  uniform sampler2D depthMap;
+ uniform vec3 lampScreen;
+ uniform float lampLevel;
+ ${pixelNoise}
  varying vec2 vUv;
  float depth(vec2 uv) { return texture2D(depthMap,uv).r; }
- bool background(vec2 uv) { return depth(uv)>.99999 || texture2D(surfaceMap,uv).a>.5; }
+ bool background(vec2 uv) { return depth(uv)>.99999 || texture2D(surfaceMap,uv).a>.9; }
  void main() {
   vec2 uv=vUv,px=vec2(1./384.,1./216.);
   vec3 color=texture2D(colorMap,uv).rgb;
@@ -32,7 +42,13 @@ const outlineFragment = /* glsl */ `
     if(jump*39.9>.35 || (jump*39.9>.2 && dot(n,up)<-.2)) color*=vec3(.82,.82,.9);
    }
   }
-  gl_FragColor=vec4(color,1.);
+  // Three hard rings at game resolution; add only sparse Bayer pixels.
+  float radius=length(floor(uv*vec2(384.,216.))+.5-lampScreen.xy);
+  float coverage=radius<2.5?.75:radius<4.5?.30:radius<6.5?.12:0.;
+  float strength=radius<2.5?.25:radius<4.5?.13:.065;
+  if(d>=lampScreen.z-.0001 && bayer(floor(uv*vec2(384.,216.)))<coverage)
+   color+=vec3(1.,.66,.29)*strength*lampLevel;
+  gl_FragColor=vec4(min(color,1.),1.);
  }
 `;
 export class GLBackend implements SceneBackend {
@@ -45,6 +61,11 @@ export class GLBackend implements SceneBackend {
   private readonly outputScene = new Scene();
   private readonly outputCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private readonly yard = buildCourtyard();
+  readonly props = new AuthoredCourtyard(this.yard);
+  readonly paddles = new PaddleBatch(this.scene);
+  readonly snow = new WorldSnow(this.scene);
+  readonly breath = new Breath(this.scene);
+  readonly footprints = new Footprints();
   private readonly caps: PrimitiveBatch;
   private readonly spheres: PrimitiveBatch;
   readonly player: Figure;
@@ -54,6 +75,7 @@ export class GLBackend implements SceneBackend {
   private readonly onLost = (event: Event) => { event.preventDefault(); this.lost = true; };
   private readonly onRestored = () => { this.timing = new GPUTimer(this.renderer.getContext() as WebGL2RenderingContext); this.lost = false; };
   constructor() {
+    this.props.material.uniforms.footprints.value = this.footprints.texture;
     this.renderer = new WebGLRenderer({ antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
     this.timing = new GPUTimer(this.renderer.getContext() as WebGL2RenderingContext);
     this.renderer.setPixelRatio(1);
@@ -101,8 +123,11 @@ export class GLBackend implements SceneBackend {
     this.stranger = new Figure(this.scene, 'stranger', procedural);
     this.target = new WebGLRenderTarget(LOW_W, LOW_H, { count: 2, minFilter: NearestFilter, magFilter: NearestFilter, depthBuffer: true });
     this.target.depthTexture = new DepthTexture(LOW_W, LOW_H, UnsignedIntType);
+    this.camera.updateMatrixWorld(true);
+    const bulb = new Vector3(1.95, .35, 3.275).project(this.camera);
+    bulb.set((bulb.x*.5+.5)*LOW_W, (bulb.y*.5+.5)*LOW_H, bulb.z*.5+.5);
     const material = new ShaderMaterial({
-      uniforms: { colorMap: { value: this.target.textures[0] }, surfaceMap: { value: this.target.textures[1] }, depthMap: { value: this.target.depthTexture } },
+      uniforms: { colorMap: { value: this.target.textures[0] }, surfaceMap: { value: this.target.textures[1] }, depthMap: { value: this.target.depthTexture }, lampScreen: { value: bulb }, lampLevel: lampUniform },
       vertexShader: 'varying vec2 vUv; void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}',
       fragmentShader: outlineFragment, depthTest: false, depthWrite: false,
     });
@@ -110,10 +135,15 @@ export class GLBackend implements SceneBackend {
   }
   get available() { return !this.lost && !this.renderer.getContext().isContextLost(); }
   render(frame: SceneFrame) {
+    lampUniform.value = lampLevel(frame.timeMs);
+    this.snow.update(frame.timeMs);
+    this.breath.update(frame);
+    this.footprints.update(frame);
+    this.paddles.begin();
     this.caps.begin();
     this.spheres.begin();
-    this.stranger.update(frame.stranger.pose, frame.stranger.look, frame.stranger.visible, this.caps, this.spheres);
-    this.player.update(frame.player.pose, frame.player.look, frame.player.visible, this.caps, this.spheres);
+    this.stranger.update(frame.stranger.pose, frame.stranger.look, frame.stranger.visible, this.caps, this.spheres, this.paddles);
+    this.player.update(frame.player.pose, frame.player.look, frame.player.visible, this.caps, this.spheres, this.paddles);
     for (let i = 0; i < frame.laneCount; i++) {
       const lane = frame.lanes[i], color = lane.pressed ? PRESSED : UNPRESSED;
       for (let k = 0; k < 40; k++) {
@@ -143,6 +173,7 @@ export class GLBackend implements SceneBackend {
         contacts[i * 4 + 2] = Math.abs(b.pos[0]) <= TABLE_HALF_W && Math.abs(b.pos[1]) <= TABLE_HALF_L && b.pos[2] >= TABLE_Z ? TABLE_Z : 0;
       }
     }
+    this.paddles.flush();
     this.caps.flush();
     this.spheres.flush();
     this.renderer.info.reset();
@@ -155,6 +186,11 @@ export class GLBackend implements SceneBackend {
     return this.renderer.domElement;
   }
   dispose() {
+    this.footprints.dispose();
+    this.breath.dispose();
+    this.snow.dispose();
+    this.props.dispose();
+    this.paddles.dispose();
     this.player.dispose();
     this.stranger.dispose();
     this.caps.dispose();

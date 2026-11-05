@@ -18,6 +18,10 @@ export interface LaneView {
 }
 /** Reused storage. Backends must not retain a pose beyond this frame. */
 export interface SceneFrame {
+  /** Presentation clock, in milliseconds; never used for gameplay timing. */
+  timeMs: number;
+  playerStrokeMs: number;
+  playing: boolean;
   player: FigureView;
   stranger: FigureView;
   balls: BallView[];

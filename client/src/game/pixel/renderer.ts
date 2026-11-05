@@ -123,6 +123,7 @@ const animator = createAnimator();
 const FLICKER_LOOK: Look = { ...STRANGER, face: [70, 66, 76] };
 const initial = animator.idle(0, 0);
 const sceneFrame: SceneFrame = {
+  timeMs: 0, playerStrokeMs: -Infinity, playing: false,
   player: { pose: initial.player, look: PLAYER, visible: true },
   stranger: { pose: initial.stranger, look: STRANGER, visible: true },
   balls: Array.from({ length: 128 }, () => ({ pos: [0, 0, 0], color: NOTE_COLORS.normal, alpha: 1, holdProgress: -1 })),
@@ -176,6 +177,9 @@ function noteToBall(note: NoteView, frame: FrameState, out: BallView): boolean {
 }
 /** Compute once, consume synchronously. Exported for deterministic backend comparisons. */
 export function describeFrame(frame: FrameState): SceneFrame {
+  sceneFrame.timeMs = frame.nowMs;
+  sceneFrame.playerStrokeMs = frame.pressedLane === null ? -Infinity : frame.nowMs - frame.pressAgeMs;
+  sceneFrame.playing = frame.countdown === null;
   const nowWall = Date.now();
   let missRecently = false;
   for (const fb of frame.feedbacks)
@@ -337,7 +341,7 @@ function drawCountdown(ctx: CanvasRenderingContext2D, value: number) {
 // ---------- Frame ----------
 export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
   const description = describeFrame(frame);
-  presentScene(ctx, description);
+  const backend = presentScene(ctx, description);
   for (let i = 0; i < description.ballCount; i++) {
     const ball = description.balls[i];
     if (ball.holdProgress < 0)
@@ -347,7 +351,7 @@ export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
   }
   drawBursts(ctx, frame.nowMs, frame.dt);
   drawFeedback(ctx, frame.feedbacks);
-  drawSnow(ctx, frame.nowMs, frame.dt);
+  if (backend === 'cpu') drawSnow(ctx, frame.nowMs, frame.dt);
   if (frame.fade > 0) {
     // Darken in hard steps rather than a smooth fade.
     ctx.fillStyle = `rgba(10, 10, 16, ${Math.floor(Math.min(1, frame.fade) * 5) / 5})`;
@@ -363,6 +367,9 @@ export function renderIdleScene(ctx: CanvasRenderingContext2D, nowMs: number, dt
   withPlayer?: boolean;
   flicker?: boolean;
 } = {}) {
+  sceneFrame.timeMs = nowMs;
+  sceneFrame.playerStrokeMs = -Infinity;
+  sceneFrame.playing = false;
   sceneFrame.flicker = options.flicker === true || Math.floor(nowMs / 110) % 61 === 0;
   const poses = animator.idle(nowMs, dt);
   sceneFrame.stranger.pose = poses.stranger;
@@ -372,8 +379,8 @@ export function renderIdleScene(ctx: CanvasRenderingContext2D, nowMs: number, dt
   sceneFrame.player.pose = poses.player;
   sceneFrame.ballCount = sceneFrame.laneCount = 0;
   sceneFrame.shakeX = sceneFrame.shakeY = 0;
-  presentScene(ctx, sceneFrame);
-  drawSnow(ctx, nowMs, dt);
+  const backend = presentScene(ctx, sceneFrame);
+  if (backend === 'cpu') drawSnow(ctx, nowMs, dt);
 }
 /** Read-only until the next render; use structuredClone for offline comparisons. */
 export function currentSceneFrame(): Readonly<SceneFrame> { return sceneFrame; }

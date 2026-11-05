@@ -1,4 +1,4 @@
-import { CapsuleGeometry, Color, DynamicDrawUsage, Float32BufferAttribute, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, Quaternion, SphereGeometry, Vector3, } from 'three';
+import { CapsuleGeometry, Color, DynamicDrawUsage, Float32BufferAttribute, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, MeshDepthMaterial, Quaternion, RGBADepthPacking, SphereGeometry, Vector3, } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BONES } from '../rig/joints';
 import { prepareMeshGeometry } from './geometry';
@@ -6,6 +6,7 @@ import { capsuleDepthMaterial, pixelMaterial } from './material';
 import { boneColor, createProceduralRig, disposeRig, GLTF_TO_WORLD, PoseRetargeter } from './retarget';
 import type { BufferGeometry, Scene, ShaderMaterial } from 'three';
 import type { Look } from '../pixel/figures';
+import type { PaddleBatch } from './paddles';
 import type { JointPose, Vec3 } from '../rig/joints';
 const Y = new Vector3(0, 1, 0), WOOD: Vec3 = [96, 78, 66], BLACK: Vec3 = [14, 14, 20];
 /** Reused instance attributes; colour/deformation and both shadows share matrices. */
@@ -36,8 +37,9 @@ export class PrimitiveBatch {
     this.mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     this.mesh.frustumCulled = false;
     this.mesh.castShadow = this.mesh.receiveShadow = true;
-    if (capsule)
-      this.mesh.customDepthMaterial = capsuleDepthMaterial();
+    // Separate instanced and skinned shadow materials prevent Three's shared
+    // depth material from rebuilding program parameters every object/frame.
+    this.mesh.customDepthMaterial = capsule ? capsuleDepthMaterial() : new MeshDepthMaterial({ depthPacking: RGBADepthPacking });
     this.mesh.count = 0;
     scene.add(this.mesh);
   }
@@ -65,7 +67,7 @@ export class PrimitiveBatch {
     this.capsules.setXYZ(this.put(color), r0, r1, length);
   }
   sphere(p: Vec3, r: number, color: Vec3, kind = 0, alpha = 1) {
-    this.pos.set(...p);
+    this.pos.set(p[0], p[1], p[2]);
     this.q.identity();
     this.scale.setScalar(r);
     this.matrix.compose(this.pos, this.q, this.scale);
@@ -73,12 +75,12 @@ export class PrimitiveBatch {
   }
   paddle(pose: JointPose, color: Vec3) {
     const { center, normal, up } = pose.paddle;
-    this.dir.set(...up);
-    this.scale.set(...normal);
+    this.dir.set(up[0], up[1], up[2]);
+    this.scale.set(normal[0], normal[1], normal[2]);
     this.pos.crossVectors(this.dir, this.scale).normalize();
     this.matrix.makeBasis(this.pos, this.dir, this.scale);
     this.scale.set(.085, .09, .014);
-    this.matrix.scale(this.scale).setPosition(...center);
+    this.matrix.scale(this.scale).setPosition(center[0], center[1], center[2]);
     this.put(color);
   }
   flush() {
@@ -167,7 +169,7 @@ export class Figure {
         console.warn(`Could not use ${this.name}.glb; keeping capsules.`, error);
     }
   }
-  update(pose: JointPose, look: Look, visible: boolean, caps: PrimitiveBatch, spheres: PrimitiveBatch) {
+  update(pose: JointPose, look: Look, visible: boolean, caps: PrimitiveBatch, spheres: PrimitiveBatch, paddles: PaddleBatch) {
     if (!this.requested) {
       this.requested = true;
       if (this.procedural) {
@@ -216,9 +218,11 @@ export class Figure {
         }
       }
     }
-    this.offset(j.wristR, pose.paddle.up, .06, 0);
-    caps.capsule(j.wristR, this.a, .02, .02, WOOD);
-    spheres.paddle(pose, look.paddle);
+    if (!paddles.add(pose.paddle)) {
+      this.offset(j.wristR, pose.paddle.up, .06, 0);
+      caps.capsule(j.wristR, this.a, .02, .02, WOOD);
+      spheres.paddle(pose, look.paddle);
+    }
   }
   private offset(p: Vec3, f: Vec3, t: number, z: number) {
     this.a[0] = p[0] + f[0] * t;
