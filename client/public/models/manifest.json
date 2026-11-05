@@ -349,7 +349,7 @@
   },
   "assets": {
     "stranger": {
-      "triangles": 1212,
+      "triangles": 1640,
       "materials": [
         "coat",
         "face_void",
@@ -357,10 +357,10 @@
         "stranger_skin",
         "trousers"
       ],
-      "bytes": 124700
+      "bytes": 163096
     },
     "player": {
-      "triangles": 1359,
+      "triangles": 1834,
       "materials": [
         "hair",
         "hoodie",
@@ -368,7 +368,7 @@
         "player_skin",
         "sneakers"
       ],
-      "bytes": 143680
+      "bytes": 187848
     },
     "paddle": {
       "triangles": 272,

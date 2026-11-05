@@ -11,7 +11,7 @@
   <h1>Pong · exported model verification</h1>
   <select id="asset"><option value="courtyard">courtyard · 44 px/m</option></select>
   <select id="pose"><option>rest</option><option>forehand</option><option>crouch</option></select>
-  <select id="view"><option>front</option><option>side</option><option>back</option></select>
+  <select id="view"><option>front</option><option>side</option><option>back</option><option>game-front</option><option>game-back</option></select>
   <label><input type="checkbox" id="pixel" checked> five lighting tones + ordered dither</label>
   <main id="viewport"></main><pre id="report">Loading exported GLBs…</pre>
 <script type="module">
@@ -133,6 +133,11 @@ function display(){
     const name=options.asset;const obj=instantiate(name);let width,target,loc;
     if(name==='player'||name==='stranger'){
       pose(obj,options.pose);width=3.95;target=[0,0,.92];loc=options.view==='side'?[6,0,1.05]:options.view==='back'?[0,-6,1.05]:[0,6,1.05];
+      if(options.view.startsWith('game-')){
+        const yaw=.2+(options.view==='game-front'?Math.PI:0),pitch=.75;
+        const f=[Math.sin(yaw)*Math.cos(pitch),Math.cos(yaw)*Math.cos(pitch),-Math.sin(pitch)];
+        width=384/44;target=[0,0,.8];loc=target.map((v,i)=>v-f[i]*16);
+      }
     }else{
       const specs={paddle:[[0,.8,.4],[0,0,.09],.55],table:[[4,-5,3],[0,0,.5],4.2],bench:[[3,-4,2],[0,0,.45],2.7],lamppost:[[4,-6,4],[0,0,1.7],6.3],tree_bare_a:[[6,-8,5],[0,0,2.3],9.4],tree_bare_b:[[6,-8,5],[0,0,2.2],9.1],building_facade:[[13,-32,15],[0,0,5.8],29]};
       [loc,target,width]=specs[name];

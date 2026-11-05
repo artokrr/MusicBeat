@@ -8,9 +8,11 @@ From the repository root, with Blender 5.2, Node, Python 3 + Pillow, and Google 
 
 ```sh
 sh tools/blender/rebuild.sh
+# Rebuild only the two characters and their manifest entries; preserve prop GLBs.
+sh tools/blender/rebuild.sh --characters-only
 ```
 
-This builds every GLB, imports the **exported GLBs** back into Blender, renders 18 character pose/view checks plus seven props and the courtyard, runs Vite on **3120**, verifies with headless Chrome CDP on **9421**, writes reports/contact sheets, and stops its server and Chrome. It refuses an occupied 3120; it never touches port 3000. Blender exits after each batch. No `npm install` runs. If the linked dependencies lack three r170, `prepare_three.sh` downloads the exact official `three@0.170.0` tarball into ignored `tools/out/three` and adds a local, ignored `client/node_modules/three` symlink; shared dependencies are unchanged.
+This builds every GLB, imports the **exported GLBs** back into Blender, renders 18 character pose/view checks, six paddle-grip close-ups, seven props and the courtyard, runs Vite on **3120**, verifies with headless Chrome CDP on **9421**, writes reports/contact sheets, and stops its server and Chrome. It refuses either occupied port; it never touches port 3000. Blender exits after each batch and Python errors produce a failing exit code. The character-only option reuses existing prop renders, rendering them if missing. No `npm install` runs. If the linked dependencies lack three r170, `prepare_three.sh` downloads the exact official `three@0.170.0` tarball into ignored `tools/out/three` and adds a local, ignored `client/node_modules/three` symlink; shared dependencies are unchanged.
 
 For just the deliverable GLBs:
 
@@ -38,7 +40,11 @@ Blender bone **local +Y** points head to tail. Bone **local +Z** is the normaliz
 
 The glTF exporter converts world positions `(x,y,z) → (x,z,-y)`; a freshly loaded GLB is **Y-up, forward -Z**. Bone-local +Y remains the longitudinal axis and bone-local +Z remains projected forward. The verification page reconstructs each tail using `bone.localToWorld(0, restLength, 0)` and compares it with converted `REST_JOINTS`. To use these assets in a Z-up three.js scene, put the loaded scene under a group rotated **+π/2 about X** (or convert the game positions/forwards to glTF coordinates). Do not apply both conversions.
 
-Skinning uses normalized linear blend weights with at most three influences per vertex: blended shoulder rings, elbow/knee transition rings, rigid feet/hands, head rigid to `head`, neck/collar to `neck`, and torso primarily `spine`. The coat skirt retains 62–96% spine influence, with 4–38% matching thigh influence toward the split hem. Hood and void are rigid together so the opening cannot separate from its darkness. The dropped player hood follows spine. Test poses stress shoulder, elbow, knee and coat deformation; they are verification poses, not animation clips.
+Skinning uses normalized linear blend weights with at most three nonzero influences per vertex: blended shoulder rings, elbow/knee transition rings, rigid feet/hands, head rigid to `head`, neck/collar to `neck`, and torso primarily `spine`. The coat skirt retains 60–96.5% spine influence; remaining weight blends continuously between the thighs across the front/back centreline. Hood and void are rigid together so the opening cannot separate from its darkness. The dropped player hood follows spine. Test poses stress shoulder, elbow, knee and coat deformation; they are verification poses, not animation clips.
+
+The second character pass uses descending trapezius rings and sleeve caps buried in the torso. Eight-sided limbs taper through supported elbow/knee rings; the player has fuller sleeves and cuffs. The stranger's mostly level A-line hem has two broad rear fold planes and a rear vent. Its deeper peaked hood sits over a raised collar. The player has a volumetric collapsed hood, asymmetric short hair and dark sneaker uppers using the existing `jeans` material above a pale `sneakers` sole. Material names and palette values are unchanged.
+
+Both right mittens have an open grip bore, rigid to `handR`, fitted to the unchanged paddle handle. Armature extras record `right_hand_grip_center_zup` = `(.323,.034,.813)`, `right_hand_grip_up_zup` = normalized `(.94,0,.342)`, and `right_hand_grip_normal_zup` = `(0,1,0)`. These are source-space rest transforms, not additional bones. To attach a paddle, convert to the renderer's coordinate system, transform the rest grip matrix into `handR` local space, and parent there. `render_check.py` demonstrates this with the imported GLBs through all three poses. Runtime attachment remains the integration workstream's responsibility.
 
 Meshes are consolidated by material (five skinned meshes per character). Character part names survive in mesh `extras.source_parts`. Facade panes `window_<row>_<column>` stay separate for runtime relighting; other facade geometry is consolidated by material.
 
@@ -48,8 +54,8 @@ Positions below are **game/Blender Z-up**, before glTF conversion. Assets contai
 
 | Asset | Local origin / orientation | Place in courtyard |
 |---|---|---|
-| `stranger.glb` | Ground between feet; faces +Y; hood crown about 1.82 m, 1.78 m skeleton | Opposite end of table, yaw π |
-| `player.glb` | Ground between feet; faces +Y; hair crown 1.783 m | Near end of table |
+| `stranger.glb` | Ground between feet; faces +Y; hood peak about 1.841 m, 1.78 m skeleton | Opposite end of table, yaw π |
+| `player.glb` | Ground between feet; faces +Y; hair crown about 1.789 m | Near end of table |
 | `paddle.glb` | **Grip centre (0,0,0)**; shaft and blade extend +Z; red face normal **+Y** | Attach using grip transform |
 | `table.glb` | Ground under tabletop centre; width X **1.525 m**, length Y **2.74 m**; green top **Z=.76 m** | `(0,0,0)` |
 | `bench.glb` | Ground under seat centre; 1.8 m along Y; faces +X; back at X≈−.29 | `(-3,.6,0)` |
@@ -87,5 +93,9 @@ All names are stable, untextured, flat base colours. RGB values in the manifest/
 - `tools/out/props-sheet.png`: all seven props rendered and visually inspected.
 - `tools/out/three_courtyard_3x.png`, `three_{stranger,player}_poses.png`, `three-props-sheet.png`: Chrome screenshots of GLTFLoader-rendered assets. The preview adds five lighting bands, ordered dither, cool light and a sodium lamp; this is a material-level approximation, not an exact copy of the CPU renderer.
 - `tools/out/three-report.json`: actual loaded triangle counts, material names, exact bone names/parents, dimensions, rest head/tail errors, projected-forward roll errors, normalized weights and browser errors.
+- `tools/out/{stranger,player}_grips.png`: imported paddle visibly seated in each right fist in rest, forehand and crouch.
+- `tools/out/three_{stranger,player}_game_poses.png`: both front-above and back-above views at **44 px/m, pitch .75**, through all three poses; all source PNGs remain 384×216.
+- `tools/out/deformation-report.json`: measured imported-GLB eight-vertex elbow/knee sections under linear blend skinning; minimum area and diameter ratios guard against collapse. This is not an automatic collision test.
+- `tools/out/before_after_game{,_3x}.png` and `before_after_{stranger,player}_game{,_3x}.png`: side-by-side baseline `e6d6b76` versus pass two, retaining native game pixels and 3× nearest enlargements. Generated by `python3 tools/blender/compare_passes.py` after preserving baseline renders in `tools/out/before/`. That baseline must include `verify_three.mjs`'s `game-front`/`game-back` views with the same camera/lighting.
 
 Blender checks use Cycles CPU, 24 samples, Standard colour management. They deliberately retain unposterized lighting so cloth planes and deformation remain inspectable; the browser proves readability under quantized lighting. No changes to the game renderer/animation integration are included. Optional bin/fence/car assets are not included.

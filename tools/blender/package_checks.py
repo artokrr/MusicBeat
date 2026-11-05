@@ -18,7 +18,10 @@ def sheet(filename,cases,columns=3):
 
 for kind in ['stranger','player']:
     sheet(f'{kind}_poses.png',[(f'{kind}_{pose}_{view}.png',f'{kind} / {pose} / {view}') for pose in POSES for view in VIEWS])
-    sheet(f'three_{kind}_poses.png',[(f'three_{kind}_{pose}_{view}.png',f'three r170 / {pose} / {view}') for pose in ['forehand','crouch'] for view in VIEWS])
+    sheet(f'three_{kind}_poses.png',[(f'three_{kind}_{pose}_{view}.png',f'three r170 / {pose} / {view}') for pose in POSES for view in VIEWS])
+    sheet(f'three_{kind}_game_poses.png',[(f'three_{kind}_{pose}_{view}.png',f'44 px/m, pitch .75 / {pose} / {view}') for view in ['game-front','game-back'] for pose in POSES])
+    if (OUT/f'{kind}_grip_rest.png').exists():
+        sheet(f'{kind}_grips.png',[(f'{kind}_grip_{pose}.png',f'{kind} / {pose} / paddle grip') for pose in POSES])
 props=['paddle','table','bench','lamppost','tree_bare_a','tree_bare_b','building_facade']
 sheet('props-sheet.png',[(name+'.png',name) for name in props])
 sheet('three-props-sheet.png',[(f'three_{name}_rest_front.png',f'three r170 / {name}') for name in props])

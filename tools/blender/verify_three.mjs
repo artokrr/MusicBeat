@@ -32,7 +32,10 @@ try{
   if(!ready)throw Error('Model check did not finish loading');
   const report=await evaluate('window.modelTest.report');
   const cases=[['courtyard','rest','front'],...Object.keys(report.assets??{}).map(name=>[name,'rest','front'])];
-  for(const name of ['stranger','player'])for(const pose of ['forehand','crouch'])for(const view of ['front','side','back'])cases.push([name,pose,view]);
+  for(const name of ['stranger','player'])for(const pose of ['rest','forehand','crouch'])for(const view of ['front','side','back','game-front','game-back']){
+    if(pose==='rest'&&view==='front')continue;
+    cases.push([name,pose,view]);
+  }
   for(const [asset,pose,view] of cases){
     const data=await evaluate(`(()=>{window.modelTest.show(${JSON.stringify(asset)},${JSON.stringify(pose)},${JSON.stringify(view)});return window.modelTest.capture()})()`);
     const path=resolve(out,`three_${asset}_${pose}_${view}.png`);writeFileSync(path,Buffer.from(data.split(',')[1],'base64'));

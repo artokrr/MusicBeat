@@ -7,6 +7,8 @@ import argparse
 import bpy
 from mathutils import Vector
 from common import *
+from build_characters import GRIP_CENTER, GRIP_UP, GRIP_NORMAL
+from mathutils import Matrix
 
 
 def load(name,location=(0,0,0),yaw=0):
@@ -117,12 +119,33 @@ def courtyard():
     render(OUT/'courtyard.png')
 
 
-def prop_checks():
+def grip_checks(kind):
+    for pose in ('rest','forehand','crouch'):
+        reset();settings();objects=load(kind)
+        rig=next(o for o in objects if o.type=='ARMATURE')
+        hand=rig.pose.bones['handR']
+        rest_hand=hand.matrix.copy()
+        paddle_objects=load('paddle')
+        grip_matrix=Matrix((GRIP_NORMAL.cross(GRIP_UP),GRIP_NORMAL,GRIP_UP)).transposed().to_4x4()
+        grip_matrix.translation=GRIP_CENTER
+        test_pose(objects,pose)
+        posed_grip=rig.matrix_world @ hand.matrix @ rest_hand.inverted() @ grip_matrix
+        for obj in paddle_objects:
+            if obj.parent not in paddle_objects:obj.matrix_world=posed_grip @ obj.matrix_world
+        center=posed_grip.translation
+        light('grip_key','AREA',(-3,4,5),(1,.86,.74),650,4)
+        light('grip_rim','AREA',(2,-3,4),(.57,.68,1),450,3)
+        camera(center+Vector((2,3,1.8)),center,.55)
+        render(OUT/f'{kind}_grip_{pose}.png')
+
+
+def prop_checks(only_missing=False):
     specs=[('paddle',(0,.8,.4),(0,0,.09),.55),('table',(4,-5,3),(0,0,.5),4.2),
            ('bench',(3,-4,2),(0,0,.45),2.7),('lamppost',(4,-6,4),(0,0,1.7),6.3),
            ('tree_bare_a',(6,-8,5),(0,0,2.3),9.4),('tree_bare_b',(6,-8,5),(0,0,2.2),9.1),
            ('building_facade',(13,-32,15),(0,0,5.8),29)]
     for name,loc,target,width in specs:
+        if only_missing and (OUT/(name+'.png')).exists():continue
         reset();settings();load(name)
         box('studio_floor',(0,0,-.06),(100,100,.1),'snow')
         light('prop_key','AREA',(-3,-4,8),(1,.88,.75),1500,6)
@@ -133,9 +156,11 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--quick',action='store_true')
     parser.add_argument('--courtyard-only',action='store_true')
+    parser.add_argument('--characters-only',action='store_true')
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else [])
     OUT.mkdir(exist_ok=True,parents=True)
     if not args.courtyard_only:
         for kind in ('stranger','player'):character_checks(kind,['rest'] if args.quick else ['rest','forehand','crouch'])
-        prop_checks()
+        for kind in ('stranger','player'):grip_checks(kind)
+        prop_checks(only_missing=args.characters_only)
     courtyard()
