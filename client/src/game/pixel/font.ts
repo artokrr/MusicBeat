@@ -18,6 +18,7 @@ interface Glyphs {
 }
 
 const cache = new Map<string, Glyphs>();
+const CACHE_LIMIT = 256;
 const requested = new Set<string>();
 let scratch: CanvasRenderingContext2D | null = null;
 
@@ -66,7 +67,12 @@ export function fitText(text: string, maxWidth: number): string {
 function render(text: string, color: string): Glyphs {
   const key = `${color}\u0000${text}`;
   const hit = cache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    // Refresh its place: the cache evicts the least recently used.
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit;
+  }
 
   const width = Math.max(1, measureText(text));
   const canvas = document.createElement('canvas');
@@ -88,7 +94,11 @@ function render(text: string, color: string): Glyphs {
 
   const glyphs = { canvas, width };
   // Don't keep a rendering made with a fallback font while the real one loads.
-  if (fontReady(text)) cache.set(key, glyphs);
+  if (fontReady(text)) {
+    cache.set(key, glyphs);
+    // Scores and combos make a new string on every hit; keep the cache bounded.
+    if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
+  }
   return glyphs;
 }
 
