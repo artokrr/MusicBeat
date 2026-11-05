@@ -120,7 +120,8 @@ const PLAYER: Look = {
 };
 // ---------- Scene state ----------
 const animator = createAnimator();
-const FLICKER_LOOK: Look = { ...STRANGER, face: [70, 66, 76] };
+// The glitch only stirs the dark inside the hood: brighter, it dithers into two pixel "eyes".
+const FLICKER_LOOK: Look = { ...STRANGER, face: [34, 32, 42] };
 const initial = animator.idle(0, 0);
 const sceneFrame: SceneFrame = {
   timeMs: 0, playerStrokeMs: -Infinity, playing: false,
