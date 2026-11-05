@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pong · exported model verification</title>
+  <style>
+    *{box-sizing:border-box}body{margin:24px;background:#171a24;color:#d8dce8;font:14px system-ui}h1{font-size:20px;font-weight:500}button,select{font:inherit;background:#292e3c;color:inherit;border:1px solid #565e70;padding:8px;margin:0 8px 12px 0}canvas{display:block;width:min(1152px,100%);height:auto;image-rendering:pixelated;border:1px solid #454b5a}pre{white-space:pre-wrap;line-height:1.5;max-width:1152px}.pass{color:#afcbb8}.fail{color:#e69d99}
+  </style>
+</head>
+<body>
+  <h1>Pong · exported model verification</h1>
+  <select id="asset"><option value="courtyard">courtyard · 44 px/m</option></select>
+  <select id="pose"><option>rest</option><option>forehand</option><option>crouch</option></select>
+  <select id="view"><option>front</option><option>side</option><option>back</option></select>
+  <label><input type="checkbox" id="pixel" checked> five lighting tones + ordered dither</label>
+  <main id="viewport"></main><pre id="report">Loading exported GLBs…</pre>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {clone} from 'three/addons/utils/SkeletonUtils.js';
+import {BONES, REST_JOINTS} from './src/game/rig/joints.ts';
+
+const names=['stranger','player','paddle','table','bench','lamppost','tree_bare_a','tree_bare_b','building_facade'];
+const loaded={};const report={three:THREE.REVISION,assets:{},errors:[]};
+const renderer=new THREE.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});
+renderer.setSize(384,216);renderer.setPixelRatio(1);renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.querySelector('#viewport').appendChild(renderer.domElement);
+const cv=(p)=>new THREE.Vector3(p[0],p[2],-p[1]);
+const options={asset:'courtyard',pose:'rest',view:'front',pixel:true};
+let scene,camera;
+const loader=new GLTFLoader();
+const expected=BONES.map(b=>b.name).sort();
+function must(condition,message){if(!condition)report.errors.push(message)}
+function check(name,gltf){
+  const root=gltf.scene;root.updateMatrixWorld(true);
+  const bones=[];const meshes=[];const mats=new Set();let triangles=0,maxWeightError=0;
+  root.traverse(o=>{if(o.isBone)bones.push(o);if(o.isMesh){meshes.push(o);triangles+=(o.geometry.index?.count??o.geometry.attributes.position.count)/3;
+    for(const m of Array.isArray(o.material)?o.material:[o.material])mats.add(m.name);
+    if(o.isSkinnedMesh){const w=o.geometry.attributes.skinWeight;for(let i=0;i<w.count;i++)maxWeightError=Math.max(maxWeightError,Math.abs(w.getX(i)+w.getY(i)+w.getZ(i)+w.getW(i)-1));}
+  }});
+  let maxHeadError=0,maxTailError=0,maxRollError=0;
+  if(name==='player'||name==='stranger'){
+    must(JSON.stringify(bones.map(b=>b.name).sort())===JSON.stringify(expected),name+': exact bone name set');
+    for(const def of BONES){
+      const b=bones.find(b=>b.name===def.name);if(!b)continue;
+      const head=cv(REST_JOINTS[def.from]),tail=cv(REST_JOINTS[def.to]);const len=head.distanceTo(tail);
+      maxHeadError=Math.max(maxHeadError,b.getWorldPosition(new THREE.Vector3()).distanceTo(head));
+      // Blender's glTF exporter preserves bone-local +Y as the longitudinal axis.
+      maxTailError=Math.max(maxTailError,b.localToWorld(new THREE.Vector3(0,len,0)).distanceTo(tail));
+      const direction=tail.clone().sub(head).normalize();
+      const z=cv([0,1,0]).addScaledVector(direction,-cv([0,1,0]).dot(direction)).normalize();
+      const actualZ=new THREE.Vector3(0,0,1).transformDirection(b.matrixWorld);
+      maxRollError=Math.max(maxRollError,actualZ.distanceTo(z));
+      must(def.parent?b.parent?.name===def.parent:!b.parent?.isBone,name+': parent '+def.name);
+    }
+    must(maxHeadError<1e-5&&maxTailError<1e-5,name+': joint error below 10 micrometres');
+    must(maxRollError<1e-5,name+': projected-forward bone roll');
+    must(maxWeightError<1e-5,name+': normalized skin weights');
+    must(meshes.every(o=>o.isSkinnedMesh),name+': every character mesh is skinned');
+  }else must(bones.length===0,name+': prop is unrigged');
+  must(name==='building_facade'||triangles<=((name==='player'||name==='stranger')?4000:3000),name+': triangle budget');
+  const bounds=new THREE.Box3().setFromObject(root);const size=bounds.getSize(new THREE.Vector3());
+  report.assets[name]={triangles,meshes:meshes.length,materials:[...mats].sort(),bones:bones.map(b=>b.name),maxHeadError,maxTailError,maxRollError,maxWeightError,boundsYUp:{min:bounds.min.toArray(),max:bounds.max.toArray(),size:size.toArray()}};
+}
+// Five lighting bands are applied to the material's illumination before the sRGB
+// output transform; the flat base colour stays intact. This preview is a visual
+// approximation of the CPU palette renderer, not a replacement game renderer.
+function stylize(mat){
+  const m=mat.clone();
+  m.onBeforeCompile=shader=>{
+    shader.fragmentShader=shader.fragmentShader.replace('#include <common>',`#include <common>
+float bayer4(vec2 p) {
+  int x=int(mod(p.x,4.0)), y=int(mod(p.y,4.0));
+  int index=y*4+x;
+  float values[16];
+  values[0]=0.; values[1]=8.; values[2]=2.; values[3]=10.;
+  values[4]=12.; values[5]=4.; values[6]=14.; values[7]=6.;
+  values[8]=3.; values[9]=11.; values[10]=1.; values[11]=9.;
+  values[12]=15.; values[13]=7.; values[14]=13.; values[15]=5.;
+  return (values[index]+.5)/16.;
+}`);
+    shader.fragmentShader=shader.fragmentShader.replace('#include <opaque_fragment>',`
+float baseL=max(dot(diffuseColor.rgb,vec3(.2126,.7152,.0722)),.001);
+float litL=dot(outgoingLight,vec3(.2126,.7152,.0722));
+float shade=sqrt(max(litL/baseL,0.));
+float band=clamp(floor(shade*3.2+(bayer4(gl_FragCoord.xy)-.5)*.25),0.,4.)/3.2;
+outgoingLight *= (band*band)/max(litL/baseL,.001);
+#include <opaque_fragment>`);
+  };
+  m.customProgramCacheKey=()=> 'pong-model-preview-five-tone-v1';return m;
+}
+function instantiate(name,position=[0,0,0],yaw=0){
+  const root=clone(loaded[name].scene);root.position.copy(cv(position));root.quaternion.setFromAxisAngle(new THREE.Vector3(0,1,0),yaw);
+  root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;if(options.pixel)o.material=Array.isArray(o.material)?o.material.map(stylize):stylize(o.material);}});
+  scene.add(root);return root;
+}
+function pose(root,name){
+  const rest=new Map();root.traverse(o=>{if(o.isBone)rest.set(o.name,o)});
+  const rotate=(n,x=0,y=0,z=0)=>{const b=rest.get(n);b.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(x*Math.PI/180,y*Math.PI/180,z*Math.PI/180,'ZYX')));};
+  if(name==='forehand'){
+    rotate('spine',10,-24);rotate('upperArmR',36,0,-62);rotate('foreArmR',78,0,-8);rotate('handR',0,0,8);
+    rotate('upperArmL',28,0,16);rotate('foreArmL',67);rotate('thighR',20,0,-10);rotate('shinR',-25);rotate('thighL',-9,0,9);rotate('shinL',-8);root.position.y-=.015;
+  }else if(name==='crouch'){
+    rotate('spine',20);for(const [s,sgn] of [['L',1],['R',-1]]){rotate('thigh'+s,48,0,sgn*9);rotate('shin'+s,-83);rotate('foot'+s,35);rotate('upperArm'+s,24,0,sgn*10);rotate('foreArm'+s,72);}root.position.y-=.21;
+  }
+  root.updateMatrixWorld(true);
+  root.traverse(o=>{if(o.isSkinnedMesh)o.computeBoundingBox()});
+  const minY=new THREE.Box3().setFromObject(root).min.y;
+  root.position.y+=.006-minY;
+  root.updateMatrixWorld(true);
+}
+function ortho(loc,target,width){
+  camera=new THREE.OrthographicCamera(-width/2,width/2,width*216/384/2,-width*216/384/2,.01,100);
+  camera.position.copy(cv(loc));camera.up.set(0,1,0);camera.lookAt(cv(target));
+}
+function display(){
+  if(scene)scene.traverse(o=>{if(o.isMesh){for(const m of Array.isArray(o.material)?o.material:[o.material])if(m.onBeforeCompile.toString().includes('bayer4'))m.dispose();}});
+  scene=new THREE.Scene();scene.background=new THREE.Color('#252a3a');
+  scene.add(new THREE.HemisphereLight('#9faed3','#536074',1.8));
+  const moon=new THREE.DirectionalLight('#adb9ee',2.5);moon.position.copy(cv([-4.5,5.5,7]));moon.castShadow=true;
+  moon.shadow.mapSize.set(2048,2048);Object.assign(moon.shadow.camera,{left:-12,right:12,top:12,bottom:-12});moon.shadow.bias=-.0002;moon.shadow.normalBias=.025;scene.add(moon);
+  const ground=new THREE.Mesh(new THREE.PlaneGeometry(80,80),new THREE.MeshStandardMaterial({color:'#c4cadc',roughness:1}));ground.rotation.x=-Math.PI/2;ground.position.y=-.012;ground.receiveShadow=true;if(options.pixel)ground.material=stylize(ground.material);scene.add(ground);
+  if(options.asset==='courtyard'){
+    instantiate('table');instantiate('bench',[-3,.6,0]);instantiate('lamppost',[2.25,.35,0]);instantiate('tree_bare_a',[-3.4,3.6,0]);instantiate('tree_bare_b',[3.9,3.9,0]);instantiate('building_facade',[0,4.6,0]);
+    pose(instantiate('player',[0,-2.05,0]),'forehand');pose(instantiate('stranger',[0,2.13,0],Math.PI),'crouch');
+    const lamp=new THREE.PointLight('#ffbe74',30,12,2);lamp.position.copy(cv([1.95,.35,3.25]));lamp.castShadow=true;lamp.shadow.normalBias=.025;lamp.shadow.bias=-.0002;scene.add(lamp);
+    const yaw=.2,pitch=.75,target=[.1,.1,.6];const f=[Math.sin(yaw)*Math.cos(pitch),Math.cos(yaw)*Math.cos(pitch),-Math.sin(pitch)];
+    ortho(target.map((v,i)=>v-f[i]*16),target,384/44);
+    // Positive projection shift moves the target 6 pixels down.
+    camera.top+=6/44;camera.bottom+=6/44;camera.updateProjectionMatrix();
+  }else{
+    const name=options.asset;const obj=instantiate(name);let width,target,loc;
+    if(name==='player'||name==='stranger'){
+      pose(obj,options.pose);width=3.95;target=[0,0,.92];loc=options.view==='side'?[6,0,1.05]:options.view==='back'?[0,-6,1.05]:[0,6,1.05];
+    }else{
+      const specs={paddle:[[0,.8,.4],[0,0,.09],.55],table:[[4,-5,3],[0,0,.5],4.2],bench:[[3,-4,2],[0,0,.45],2.7],lamppost:[[4,-6,4],[0,0,1.7],6.3],tree_bare_a:[[6,-8,5],[0,0,2.3],9.4],tree_bare_b:[[6,-8,5],[0,0,2.2],9.1],building_facade:[[13,-32,15],[0,0,5.8],29]};
+      [loc,target,width]=specs[name];
+    }
+    ortho(loc,target,width);
+    const fill=new THREE.DirectionalLight('#ffe0c3',2);fill.position.copy(cv([-3,4,5]));scene.add(fill);
+  }
+  renderer.render(scene,camera);
+}
+try{
+  await Promise.all(names.map(async name=>{const gltf=await loader.loadAsync('/models/'+name+'.glb');loaded[name]=gltf;check(name,gltf)}));
+  const required={stranger:['face_void'],lamppost:['emissive_bulb'],building_facade:['window_lit','window_dark']};
+  for(const [asset,mats] of Object.entries(required))for(const mat of mats)must(report.assets[asset].materials.includes(mat),asset+': '+mat+' material');
+  report.maxJointError=Math.max(...Object.values(report.assets).flatMap(a=>[a.maxHeadError,a.maxTailError]));report.passed=report.errors.length===0;
+  for(const name of names)document.querySelector('#asset').add(new Option(name,name));
+  display();
+  const el=document.querySelector('#report');el.className=report.passed?'pass':'fail';el.textContent=JSON.stringify(report,null,2);
+  window.modelTest={ready:true,report,show:(asset,poseName='rest',view='front',pixel=true)=>{Object.assign(options,{asset,pose:poseName,view,pixel});display();return report;},capture:()=>renderer.domElement.toDataURL('image/png')};
+  for(const id of ['asset','pose','view','pixel'])document.querySelector('#'+id).addEventListener('change',e=>{options[id]=id==='pixel'?e.target.checked:e.target.value;display()});
+}catch(error){document.querySelector('#report').textContent=error.stack;console.error(error);window.modelTest={ready:true,report:{passed:false,error:error.stack}};}
+</script>
+</body></html>

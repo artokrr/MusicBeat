@@ -29,3 +29,7 @@ server/uploads/
 # Cache
 .cache/
 *.tsbuildinfo
+
+# Procedural model verification artifacts
+tools/out/
+tools/blender/__pycache__/
