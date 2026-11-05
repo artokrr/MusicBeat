@@ -1,26 +1,10 @@
-// People, built from capsules on a simple skeleton and posed with a handful of
-// angles. Slim adult proportions: about 1.78 m tall, 7.5 heads.
+// People for the CPU renderer: capsules along the bones of a JointPose
+// (see rig/joints.ts), plus a coat, a hood and a paddle.
 
-import { lerp, type RGB, type Renderer3D, type Vec3 } from './engine3d';
+import { BONES } from '../rig/joints';
 
-export interface ArmPose {
-  /** Upper arm raised forward from hanging (radians). */
-  swing: number;
-  /** Elbow bend, added to `swing` for the forearm. */
-  bend: number;
-  /** Upper arm raised out to the side. */
-  spread: number;
-}
-
-export interface Pose {
-  crouch: number;
-  lean: number;
-  stance: number;
-  /** Upper body turned left (+) or right (-), radians. */
-  twist: number;
-  armR: ArmPose;
-  armL: ArmPose;
-}
+import type { RGB, Renderer3D } from './engine3d';
+import type { JointPose, Vec3 } from '../rig/joints';
 
 export interface Look {
   top: RGB;
@@ -38,116 +22,69 @@ export interface Look {
   hoodDown?: boolean;
 }
 
-const WOOD: RGB = [96, 78, 66];
-
-const blendArm = (a: ArmPose, b: ArmPose, t: number): ArmPose => ({
-  swing: lerp(a.swing, b.swing, t),
-  bend: lerp(a.bend, b.bend, t),
-  spread: lerp(a.spread, b.spread, t),
-});
-
-export function blendPose(a: Pose, b: Pose, t: number): Pose {
-  return {
-    crouch: lerp(a.crouch, b.crouch, t),
-    lean: lerp(a.lean, b.lean, t),
-    stance: lerp(a.stance, b.stance, t),
-    twist: lerp(a.twist, b.twist, t),
-    armR: blendArm(a.armR, b.armR, t),
-    armL: blendArm(a.armL, b.armL, t),
-  };
-}
-
 /** Collects shadow casters while a figure is drawn, so they can be stamped afterwards. */
 export type ShadowSink = (a: Vec3, b: Vec3, radius: number) => void;
 
-/**
- * Draws a person standing at (x, y) and facing `yaw` (0 = +x, pi/2 = +y).
- * Returns the centre of the paddle blade.
- */
-export function drawFigure(R: Renderer3D, x: number, y: number, yaw: number, pose: Pose, look: Look, shadows: ShadowSink): Vec3 {
-  const fx = Math.cos(yaw);
-  const fy = Math.sin(yaw);
-  const sx = -fy;
-  const sy = fx;
-  // Local frame: a = forward, b = to the figure's left, z = up.
-  const P = (a: number, b: number, z: number): Vec3 => [x + fx * a + sx * b, y + fy * a + sy * b, z];
-  const ct = Math.cos(pose.twist);
-  const st = Math.sin(pose.twist);
-  const T = (a: number, b: number, z: number): Vec3 => P(a * ct - b * st, a * st + b * ct, z);
-  const bone = (a: Vec3, b: Vec3, r0: number, r1: number, color: RGB) => {
-    R.capsule(a, b, r0, r1, color);
-    shadows(a, b, (r0 + r1) / 2);
-  };
+const WOOD: RGB = [96, 78, 66];
 
-  const { crouch, lean, stance } = pose;
-  const hipZ = 0.93 - crouch * 0.12;
-  const shZ = hipZ + 0.5 * Math.cos(lean);
-  const shA = 0.5 * Math.sin(lean);
+function boneColor(name: string, look: Look): RGB {
+  if (name.startsWith('thigh') || name.startsWith('shin')) return look.legs;
+  if (name.startsWith('foot')) return look.shoes;
+  if (name === 'neck' || name.startsWith('hand')) return look.skin;
+  return look.top;
+}
 
-  // Legs
-  const footL = P(0.08, stance, 0.05);
-  const footR = P(-0.06, -stance, 0.05);
-  const kneeL = P(0.13 + crouch * 0.1, stance * 0.8, 0.5 - crouch * 0.04);
-  const kneeR = P(0.06 + crouch * 0.1, -stance * 0.8, 0.5 - crouch * 0.04);
-  bone(P(0, 0.09, hipZ), kneeL, 0.075, 0.058, look.legs);
-  bone(kneeL, footL, 0.055, 0.042, look.legs);
-  bone(P(0, -0.09, hipZ), kneeR, 0.075, 0.058, look.legs);
-  bone(kneeR, footR, 0.055, 0.042, look.legs);
-  bone(footL, P(0.2, stance, 0.04), 0.045, 0.04, look.shoes);
-  bone(footR, P(0.06, -stance, 0.04), 0.045, 0.04, look.shoes);
+const add = (a: Vec3, b: Vec3, k = 1): Vec3 => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
-  // Torso
-  const chest = T(shA * 0.8, 0, shZ - 0.12);
-  const neck = T(shA, 0, shZ + 0.04);
-  bone(P(0, 0, hipZ), chest, 0.14, 0.16, look.top);
-  if (look.coat) bone(T(shA * 0.8, 0, shZ - 0.1), P(-0.02, 0, 0.42), 0.155, 0.2, look.top);
+export function drawFigure(R: Renderer3D, pose: JointPose, look: Look, shadows: ShadowSink) {
+  const j = pose.joints;
+  const f = pose.forward;
+  for (const bone of BONES) {
+    if (bone.name === 'head') continue;
+    const a = j[bone.from];
+    const b = j[bone.to];
+    const color = boneColor(bone.name, look);
+    R.capsule(a, b, bone.radius[0], bone.radius[1], color);
+    shadows(a, b, (bone.radius[0] + bone.radius[1]) / 2);
+  }
 
-  // Head
-  const headC = T(shA + Math.sin(lean) * 0.12, 0, shZ + 0.2);
-  bone(neck, headC, 0.045, 0.05, look.skin);
+  if (look.coat) {
+    // A long coat: one smooth cone from the chest to just below the knee, its hem swinging a little.
+    const hem: Vec3 = [
+      j.pelvis[0] - f[0] * 0.02 + f[0] * pose.cloth.swingForward * 0.06,
+      j.pelvis[1] - f[1] * 0.02 + f[1] * pose.cloth.swingForward * 0.06,
+      0.42,
+    ];
+    const top: Vec3 = [j.chest[0], j.chest[1], j.chest[2] + 0.02];
+    R.capsule(top, hem, 0.155, 0.2, look.top);
+    shadows(top, hem, 0.18);
+  }
+
+  const headC = j.head;
+  const back = sub(j.head, add(j.head, f, 1));
   if (look.hood) {
-    R.sphere(T(shA - 0.04, 0, shZ + 0.04), 0.13, look.top);
-    R.sphere([headC[0] - fx * 0.03, headC[1] - fy * 0.03, headC[2] + 0.015], 0.13, look.top);
-    R.sphere([headC[0] + fx * 0.05, headC[1] + fy * 0.05, headC[2] - 0.01], 0.085, look.face ?? [14, 14, 20]);
+    R.sphere(add(j.neck, back, 0.04), 0.13, look.top);
+    R.sphere(add(add(headC, back, 0.03), [0, 0, 0.015]), 0.13, look.top);
+    R.sphere(add(add(headC, f, 0.05), [0, 0, -0.01]), 0.085, look.face ?? [14, 14, 20]);
   } else {
     R.sphere(headC, 0.105, look.skin);
-    R.sphere([headC[0] - fx * 0.025, headC[1] - fy * 0.025, headC[2] + 0.03], 0.1, look.hair);
-    if (look.hoodDown) R.sphere(T(shA - 0.1, 0, shZ + 0.02), 0.12, look.top);
+    R.sphere(add(add(headC, back, 0.025), [0, 0, 0.03]), 0.1, look.hair);
+    if (look.hoodDown) R.sphere(add(j.neck, back, 0.1), 0.12, look.top);
   }
   shadows(headC, headC, 0.12);
 
-  // Arms
-  const arm = (side: 1 | -1, a: ArmPose): [Vec3, Vec3] => {
-    const upper = 0.3;
-    const lower = 0.27;
-    const shoulder = T(shA, side * 0.2, shZ - 0.02);
-    const outward = Math.sin(a.spread) * upper;
-    const elbow = T(shA + Math.sin(a.swing) * upper, side * (0.2 + outward), shZ - 0.02 - Math.cos(a.swing) * upper * Math.cos(a.spread));
-    const fore = a.swing + a.bend;
-    const hand = T(shA + Math.sin(a.swing) * upper + Math.sin(fore) * lower, side * (0.2 + outward), elbow[2] - Math.cos(fore) * lower);
-    bone(shoulder, elbow, 0.055, 0.048, look.top);
-    bone(elbow, hand, 0.045, 0.038, look.top);
-    R.sphere(hand, 0.038, look.skin);
-    return [elbow, hand];
-  };
-  arm(1, pose.armL);
-  const [elbowR, handR] = arm(-1, pose.armR);
-
-  // Paddle: a short handle, then a flat blade turned to the side of the hand.
-  const dx = handR[0] - elbowR[0];
-  const dy = handR[1] - elbowR[1];
-  const dz = handR[2] - elbowR[2];
-  const dl = Math.hypot(dx, dy, dz);
-  const d: Vec3 = [dx / dl, dy / dl, dz / dl];
-  const blade: Vec3 = [handR[0] + d[0] * 0.14, handR[1] + d[1] * 0.14, handR[2] + d[2] * 0.14];
-  R.capsule(handR, [handR[0] + d[0] * 0.06, handR[1] + d[1] * 0.06, handR[2] + d[2] * 0.06], 0.02, 0.02, WOOD);
-  const e: Vec3 = [d[1] * 0 - d[2] * sy, d[2] * sx - d[0] * 0, d[0] * sy - d[1] * sx];
+  // Paddle: a short handle, then a flat blade.
+  const { center, up, normal } = pose.paddle;
+  const wrist = j.wristR;
+  R.capsule(wrist, add(wrist, up, 0.06), 0.02, 0.02, WOOD);
+  const e: Vec3 = [up[1] * normal[2] - up[2] * normal[1], up[2] * normal[0] - up[0] * normal[2], up[0] * normal[1] - up[1] * normal[0]];
   for (let a = -0.08; a <= 0.08; a += 0.014) {
     for (let b = -0.075; b <= 0.075; b += 0.014) {
       if ((a / 0.08) ** 2 + (b / 0.075) ** 2 > 1) continue;
-      R.sphere([blade[0] + d[0] * a + e[0] * b, blade[1] + d[1] * a + e[1] * b, blade[2] + d[2] * a + e[2] * b], 0.014, look.paddle);
+      R.sphere(add(add(center, up, a), e, b), 0.014, look.paddle);
     }
   }
-  shadows(blade, blade, 0.07);
-  return blade;
+  shadows(center, center, 0.07);
 }
+

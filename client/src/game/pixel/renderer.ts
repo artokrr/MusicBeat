@@ -9,7 +9,8 @@ import type { NoteType } from '../../types/beatmap';
 import type { HitFeedback, HitResult } from '../../types/game';
 import { clamp, lerp, type RGB, type Renderer3D, type Vec3 } from './engine3d';
 import { createCourtyard, paintCourtyard, TABLE_HALF_L, TABLE_HALF_W, TABLE_Z } from './courtyard';
-import { blendPose, drawFigure, type Look, type Pose, type ShadowSink } from './figures';
+import { blendPose, poseJoints, type Pose } from '../anim/pose';
+import { drawFigure, type Look, type ShadowSink } from './figures';
 import { drawText } from './font';
 import { drawHud, type HudState } from './hud';
 import { LOW_H, LOW_W, PAL, WORLD_SCALE, makeCanvas } from './stage';
@@ -184,11 +185,11 @@ function drawStranger(R: Renderer3D, x: number, pose: Pose, flicker: boolean) {
   const look = flicker ? { ...STRANGER, face: [70, 66, 76] as RGB } : STRANGER;
   const jitter = flicker ? 0.05 : 0;
   // Facing the camera, his right hand is on the screen's left: stand to the right of the ball.
-  drawFigure(R, x + jitter, NPC_FEET_Y, -Math.PI / 2, pose, look, shadowSink(R));
+  drawFigure(R, poseJoints(x + jitter, NPC_FEET_Y, -Math.PI / 2, pose), look, shadowSink(R));
 }
 
 function drawPlayerFigure(R: Renderer3D, x: number, pose: Pose) {
-  drawFigure(R, x, PLAYER_FEET_Y, Math.PI / 2 + 0.05, pose, PLAYER, shadowSink(R));
+  drawFigure(R, poseJoints(x, PLAYER_FEET_Y, Math.PI / 2 + 0.05, pose), PLAYER, shadowSink(R));
 }
 
 /** A ball, its contact shadow on whatever is under it, and an optional faded trail. */
