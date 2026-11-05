@@ -49,6 +49,9 @@ export class PoseRetargeter {
   private readonly y = new Vector3();
   private readonly z = new Vector3();
   private readonly stretch = new Vector3();
+  private readonly gripCorrection: Matrix4 | null;
+  private readonly hand = new Matrix4();
+  private readonly wrist: Vec3 = [0, 0, 0];
   constructor(readonly root: Object3D) {
     root.updateMatrixWorld(true);
     const bones = new Map<string, Bone>();
@@ -67,18 +70,44 @@ export class PoseRetargeter {
     });
     const depth = (o: Object3D): number => o.parent ? 1 + depth(o.parent) : 0;
     this.bindings.sort((a, b) => depth(a.bone) - depth(b.bone));
+    // The authored mitten grips across the hand, not along the hand bone.
+    // Cache its bind-space grip frame instead of treating it as a capsule.
+    let gripCorrection: Matrix4 | null = null;
+    root.traverse(o => {
+      const data = o.userData, hand = bones.get('handR');
+      if (!hand || !data.right_hand_grip_center_zup || !data.right_hand_grip_up_zup || !data.right_hand_grip_normal_zup) return;
+      this.y.fromArray(data.right_hand_grip_normal_zup).normalize();
+      this.z.fromArray(data.right_hand_grip_up_zup).normalize();
+      this.x.crossVectors(this.y, this.z).normalize();
+      this.frame.makeBasis(this.x, this.y, this.z).setPosition(...data.right_hand_grip_center_zup as Vec3);
+      gripCorrection = this.frame.clone().invert().multiply(hand.matrixWorld);
+    });
+    this.gripCorrection = gripCorrection;
   }
   update(pose: JointPose) {
     this.root.updateMatrixWorld(true);
+    if (this.gripCorrection) {
+      this.z.fromArray(pose.paddle.up);
+      this.y.fromArray(pose.paddle.normal);
+      this.x.crossVectors(this.y, this.z).normalize();
+      this.hand.makeBasis(this.x, this.y, this.z);
+      this.x.fromArray(pose.paddle.center).addScaledVector(this.z, -.145);
+      this.hand.setPosition(this.x).multiply(this.gripCorrection);
+      this.x.setFromMatrixPosition(this.hand);
+      this.wrist[0] = this.x.x; this.wrist[1] = this.x.y; this.wrist[2] = this.x.z;
+    }
     for (let i = 0; i < this.bindings.length; i++) {
       const { def, bone, correction, restLength, scale } = this.bindings[i];
-      const a = pose.joints[def.from], b = pose.joints[def.to];
+      const a = pose.joints[def.from], b = this.gripCorrection && def.name === 'foreArmR' ? this.wrist : pose.joints[def.to];
       const facing = def.name.startsWith('thigh') || def.name.startsWith('shin') || def.name.startsWith('foot') ? pose.forward : pose.chestForward;
       const length = aimFrame(a, b, facing, this.frame, this.x, this.y, this.z);
       this.desired.copy(this.frame).multiply(correction);
       this.stretch.copy(scale);
       this.stretch.y *= length / restLength;
       this.desired.scale(this.stretch).setPosition(a[0], a[1], a[2]);
+      // Meet the corrected wrist with the sleeve; leave the animator's blade
+      // target, gameplay contacts, and procedural/CPU skeleton untouched.
+      if (this.gripCorrection && def.name === 'handR') this.desired.copy(this.hand);
       if (bone.parent)
         bone.matrix.multiplyMatrices(this.inverse.copy(bone.parent.matrixWorld).invert(), this.desired);
       else
