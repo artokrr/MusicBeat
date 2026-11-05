@@ -134,6 +134,7 @@ export function generateBeatmap(input: BeatAnalysis): Beatmap {
     prevLane = lanes[lanes.length - 1]!;
   }
   placed.sort((a, b) => a.time - b.time);
+  keepSpacingAfterSnap(placed);
 
   // Drops open on the centre key.
   for (const p of placed) {
@@ -643,6 +644,33 @@ function markEchoes(placed: Placed[], beatSec: number) {
 function noteTime(slot: Slot): number {
   // Hit on the sound itself when there is one; it's what the player hears.
   return slot.onset && Math.abs(slot.onset.time - slot.time) <= 0.04 ? slot.onset.time : slot.time;
+}
+
+/**
+ * Notes were chosen with spacing checked on grid times, then snapped to their
+ * onsets (up to 40 ms away), which can squeeze two notes closer than allowed.
+ * Put the notes of any squeezed spot back on their grid times, which passed
+ * the spacing check, until the final times are clean too.
+ */
+function keepSpacingAfterSnap(placed: Placed[]) {
+  for (let pass = 0; pass < 8; pass++) {
+    let changed = false;
+    for (let i = 1; i < placed.length; i++) {
+      const gap = placed[i]!.time - placed[i - 1]!.time;
+      const nextGap = i + 1 < placed.length ? placed[i + 1]!.time - placed[i]!.time : Infinity;
+      const squeezed = gap < PAIR_GAP_SEC || (gap < MIN_GAP_SEC && nextGap < MIN_GAP_SEC);
+      if (!squeezed) continue;
+      for (const j of [i - 1, i, i + 1]) {
+        const note = placed[j];
+        if (note && note.time !== note.slot.time) {
+          note.time = note.slot.time;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) return;
+    placed.sort((a, b) => a.time - b.time);
+  }
 }
 
 function fitsSpacing(sortedTimes: number[], time: number): boolean {
