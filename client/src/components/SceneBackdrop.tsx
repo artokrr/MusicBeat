@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 
+import MenuControls from './MenuControls';
+
 import PixelStage from '../game/pixel/PixelStage';
 import { renderIdleScene } from '../game/pixel/renderer';
 import { LOW_H, LOW_W } from '../game/pixel/stage';
@@ -40,5 +42,5 @@ export default function SceneBackdrop({ dim = 0.5, withPlayer = false, glitch = 
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  return <PixelStage ref={canvasRef}>{children}</PixelStage>;
+  return <PixelStage ref={canvasRef}><MenuControls style={{ display: 'contents' }}>{children}</MenuControls></PixelStage>;
 }

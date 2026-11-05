@@ -269,7 +269,7 @@ export default function ResultsScreen() {
       <div style={at(LEFT, TOP)}>
         <div ref={shareCardRef} className="px-panel" style={styles.card}>
           <PxText text={`@${fitHandle(safeHandle)}`} style={{ color: 'var(--text-dim)' }} />
-          <PxText text={fitTitle(safeTitle)} style={{ color: 'var(--rose)' }} />
+          <PxText className="px-truncate" text={fitTitle(safeTitle)} style={{ color: 'var(--rose)' }} />
 
           <div style={styles.gradeRow}>
             <PxText text={grade} scale={3} style={{ color }} />
@@ -295,7 +295,7 @@ export default function ResultsScreen() {
       </div>
 
       {/* Right: what next, then sharing */}
-      <div style={at(SIDE_X, TOP, styles.side)}>
+      <div className="px-results-side" style={at(SIDE_X, TOP, styles.side)}>
         <div style={styles.actions}>
           <button className="px-option" onClick={handleRetry} autoFocus>
             <PxText text="play again" />
@@ -411,16 +411,21 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
   },
   side: {
-    width: u(SIDE_W),
     display: 'flex',
     flexDirection: 'column',
     gap: u(4),
+    maxHeight: u(216 - TOP - 8),
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    padding: `${u(1)} ${u(2)} ${u(2)} ${u(9)}`,
+    marginLeft: u(-9),
+    width: u(SIDE_W + 9),
   },
   actions: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'flex-start',
-    marginLeft: u(-9),
+    marginLeft: u(-7),
   },
   divider: {
     height: u(1),

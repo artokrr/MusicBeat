@@ -131,7 +131,13 @@ input[type="file"] {
 .px-option:focus-visible::before,
 .px-option:hover::before {
   background: var(--rose);
-  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  clip-path: polygon(0 0, var(--px) 0, var(--px) var(--px),
+    calc(var(--px) * 2) var(--px), calc(var(--px) * 2) calc(var(--px) * 2),
+    calc(var(--px) * 3) calc(var(--px) * 2), calc(var(--px) * 3) calc(var(--px) * 3),
+    100% calc(var(--px) * 3), 100% calc(var(--px) * 4),
+    calc(var(--px) * 3) calc(var(--px) * 4), calc(var(--px) * 3) calc(var(--px) * 5),
+    calc(var(--px) * 2) calc(var(--px) * 5), calc(var(--px) * 2) calc(var(--px) * 6),
+    var(--px) calc(var(--px) * 6), var(--px) 100%, 0 100%);
   animation: px-blink 0.9s steps(1) infinite;
 }
 
@@ -267,4 +273,44 @@ input[type="file"] {
 .px-option:disabled {
   opacity: 0.5;
   cursor: wait;
+}
+
+/* Screen changes reveal immediately and never intercept play input. */
+.px-screen { animation: px-arrive 240ms steps(4, end); }
+.px-pause { animation: px-arrive 160ms steps(4, end); }
+@keyframes px-arrive { from { opacity: 0.6; } to { opacity: 1; } }
+
+button:focus-visible {
+  outline: var(--px) solid var(--rose);
+  outline-offset: var(--px);
+}
+.px-option:focus-visible { outline: none; background: var(--hud-line); }
+.px-option:active:not(:disabled) { color: var(--rose); background: var(--hud-line); }
+.px-option:active::before { animation: none; }
+.px-option:disabled { color: var(--text-faint); cursor: not-allowed; }
+.px-option:disabled::before { background: none; animation: none; }
+.px-drop:hover, .px-drop:focus-visible { background: var(--hud-line); }
+.px-drop:active { background: var(--rose-deep); }
+.px-button:disabled { color: var(--text-faint); border-color: var(--text-faint); background: var(--hud); }
+.px-range { border-radius: 0; }
+.px-range:hover::-webkit-slider-thumb, .px-range:focus-visible::-webkit-slider-thumb { background: var(--rose); }
+.px-range:hover::-moz-range-thumb, .px-range:focus-visible::-moz-range-thumb { background: var(--rose); }
+.px-range:active::-webkit-slider-thumb { background: var(--warm); }
+.px-range:active::-moz-range-thumb { background: var(--warm); }
+.px-range:disabled, .px-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.px-input { caret-color: var(--rose); }
+.px-input:hover { border-color: var(--text-dim); }
+.px-input:focus { border-color: var(--rose); }
+.px-input::selection { background: var(--rose-deep); color: var(--text); }
+.px-truncate, .px-loading-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.px-loading-title { max-width: calc(var(--px) * 336); }
+.px-results-side { scrollbar-width: thin; scrollbar-color: var(--text-faint) var(--hud); }
+.px-results-side > * { flex-shrink: 0; overflow-wrap: anywhere; }
+.px-results-side::-webkit-scrollbar { width: calc(var(--px) * 2); }
+.px-results-side::-webkit-scrollbar-track { background: var(--hud); }
+.px-results-side::-webkit-scrollbar-thumb { background: var(--text-faint); }
+.px-loading-tip { animation: px-loading-pulse 1200ms steps(1) infinite; }
+@keyframes px-loading-pulse { 0%, 75% { opacity: 1; } 76%, 100% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) {
+  .px-screen, .px-pause, .px-loading-tip { animation: none; }
 }

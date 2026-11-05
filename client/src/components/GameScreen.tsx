@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 
+import MenuControls from './MenuControls';
 import { useGameStore } from '../store/gameStore';
 import { DIFFICULTY_PRESETS } from '../types/game';
 import Game from '../game/Game';
@@ -308,7 +309,8 @@ export default function GameScreen() {
   // Keyboard controls
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !e.repeat) {
+        e.preventDefault();
         togglePause();
       }
     };
@@ -443,7 +445,7 @@ export default function GameScreen() {
         {/* Pause menu */}
         {phase === 'paused' && (
           <div style={styles.pauseScrim}>
-            <div className="px-panel" style={styles.pausePanel}>
+            <MenuControls modal className="px-panel px-pause" style={styles.pausePanel}>
               <PxText text="paused" scale={2} style={styles.pauseTitle} />
 
               <div style={styles.pauseVolume}>
@@ -497,7 +499,7 @@ export default function GameScreen() {
                   <PxText text="quit" />
                 </button>
               </div>
-            </div>
+            </MenuControls>
           </div>
         )}
       </Game>
@@ -539,6 +541,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 'calc(var(--px) * 4)',
   },
   pauseLabel: {
+    width: 'calc(var(--px) * 40)',
     color: 'var(--text-dim)',
   },
   pauseRange: {

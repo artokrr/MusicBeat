@@ -167,10 +167,10 @@ export default function RunPage({ runId }: RunPageProps) {
     <SceneBackdrop dim={0.6}>
       <div className="px-panel" style={at(LEFT, TOP, styles.card)}>
         <div style={styles.header}>
-          <PxText text={`@${run.handle}`} style={{ color: 'var(--text-dim)' }} />
+          <PxText className="px-truncate" text={`@${run.handle}`} style={{ color: 'var(--text-dim)' }} />
           <PxText text={run.difficulty} style={{ color: 'var(--text-faint)' }} />
         </div>
-        <PxText text={title} style={{ color: 'var(--rose)' }} />
+        <PxText className="px-truncate" text={title} style={{ color: 'var(--rose)' }} />
 
         <div style={styles.gradeRow}>
           <PxText text={run.grade} scale={3} style={{ color }} />
@@ -199,7 +199,7 @@ export default function RunPage({ runId }: RunPageProps) {
           <PxText text="play" />
         </button>
         <button className="px-option" onClick={handleCopyLink}>
-          <PxText text={copyMessage ? copyMessage.toLowerCase() : 'copy link'} />
+          <PxText text={copyMessage ? copyMessage.toLowerCase() : 'copy link'} maxWidth={96} />
         </button>
       </div>
     </SceneBackdrop>
@@ -214,6 +214,9 @@ const SIDE_X = LEFT + CARD_W + 16;
 
 const styles: Record<string, React.CSSProperties> = {
   center: {
+    maxHeight: u(116),
+    overflowY: 'auto',
+    overflowWrap: 'anywhere',
     width: '100%',
     display: 'flex',
     flexDirection: 'column',
@@ -228,6 +231,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: u(2),
   },
   header: {
+    gap: u(8),
     display: 'flex',
     justifyContent: 'space-between',
   },
@@ -258,6 +262,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
   },
   side: {
+    width: u(112),
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'flex-start',

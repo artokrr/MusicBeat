@@ -45,7 +45,7 @@ function App() {
   }
 
   return (
-    <div style={{ width: '100%', height: '100%' }}>
+    <div key={screen} className="px-screen" style={{ width: '100%', height: '100%' }}>
       {screen === 'upload' && <UploadScreen />}
       {screen === 'loading' && <LoadingScreen />}
       {screen === 'playing' && <GameScreen />}
