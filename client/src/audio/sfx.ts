@@ -35,7 +35,12 @@ let variation = 0;
 function context(): AudioContext | null {
   if (typeof window === 'undefined' || typeof AudioContext === 'undefined') return null;
   if (!ctx) {
+    // In development, Vite re-runs this module on edit; close the context a
+    // previous copy left behind instead of piling up live AudioContexts.
+    const shared = globalThis as { __pongSfxContext?: AudioContext };
+    if (shared.__pongSfxContext && shared.__pongSfxContext.state !== 'closed') void shared.__pongSfxContext.close();
     ctx = new AudioContext({ latencyHint: 'interactive' });
+    shared.__pongSfxContext = ctx;
     const sr = ctx.sampleRate;
 
     master = ctx.createGain();
@@ -211,3 +216,4 @@ export const sfx = {
     paddleHit({ gain: 0.45 });
   },
 };
+
