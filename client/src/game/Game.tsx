@@ -351,37 +351,34 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
       }
     };
 
+    // Pointer lanes are thirds of the game canvas, not of the window: the
+    // canvas is letterboxed (whole-pixel scaling), so in a wide window it can
+    // sit entirely inside the window's middle third. Presses on the letterbox
+    // around the canvas count too, mapped to the nearest lane.
+    const isPlayArea = (target: EventTarget | null) => {
+      const canvas = canvasRef.current;
+      if (!canvas || !(target instanceof HTMLElement)) return false;
+      return target === canvas || target === canvas.parentElement || target === canvas.parentElement?.parentElement;
+    };
+    const laneAt = (clientX: number): LaneIndex => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect || rect.width === 0) return 1;
+      const t = (clientX - rect.left) / rect.width;
+      return t < 1 / 3 ? 0 : t > 2 / 3 ? 2 : 1;
+    };
+
     const handleMouseDown = (e: MouseEvent) => {
-      if ((e.target as HTMLElement).tagName === 'CANVAS') {
-        // Simple click mapping based on X position on screen relative to window center?
-        // Let's just map click to Center for now to avoid complex coordinate math without rect
-        // Or better: map left/right/center of screen width
-        const width = window.innerWidth;
-        const x = e.clientX;
-        if (x < width * 0.33) handleInputDown(0);
-        else if (x > width * 0.66) handleInputDown(2);
-        else handleInputDown(1);
-      }
+      if (isPlayArea(e.target)) handleInputDown(laneAt(e.clientX));
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-        // Same logic for up
-        const width = window.innerWidth;
-        const x = e.clientX;
-        if (x < width * 0.33) handleInputUp(0);
-        else if (x > width * 0.66) handleInputUp(2);
-        else handleInputUp(1);
+      handleInputUp(laneAt(e.clientX));
     };
 
-    // Touch events similarly
     const handleTouchStart = (e: TouchEvent) => {
-      if ((e.target as HTMLElement).tagName === 'CANVAS') {
+      if (isPlayArea(e.target)) {
         e.preventDefault();
-        const width = window.innerWidth;
-        const x = e.touches[0].clientX;
-        if (x < width * 0.33) handleInputDown(0);
-        else if (x > width * 0.66) handleInputDown(2);
-        else handleInputDown(1);
+        handleInputDown(laneAt(e.touches[0].clientX));
       }
     };
 
