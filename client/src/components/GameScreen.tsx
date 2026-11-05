@@ -3,7 +3,11 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { DIFFICULTY_PRESETS } from '../types/game';
 import Game from '../game/Game';
+import { sfx } from '../audio/sfx';
+
+import type { GameSoundEvent } from '../game/Game';
 import GameHUD from './GameHUD';
+import PxText from '../game/pixel/PxText';
 
 import type { FailReason, RunOutcome } from '../types/game';
 
@@ -25,9 +29,8 @@ export default function GameScreen() {
   const [currentTime, setCurrentTime] = useState(0);
   const [countdown, setCountdown] = useState(3);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const [failStartMs, setFailStartMs] = useState<number | null>(null);
 
-  // Hit sound buffer
-  const hitSoundBufferRef = useRef<AudioBuffer | null>(null);
 
   const audioBuffer = useGameStore((state) => state.audioBuffer);
   const beatmap = useGameStore((state) => state.beatmap);
@@ -38,6 +41,8 @@ export default function GameScreen() {
   const difficulty = useGameStore((state) => state.difficulty);
   const volume = useGameStore((state) => state.musicVolume);
   const setMusicVolume = useGameStore((state) => state.setMusicVolume);
+  const sfxVolume = useGameStore((state) => state.sfxVolume);
+  const setSfxVolume = useGameStore((state) => state.setSfxVolume);
   const health = useGameStore((state) => state.health);
   const missStreak = useGameStore((state) => state.missStreak);
   const setRunOutcome = useGameStore((state) => state.setRunOutcome);
@@ -85,6 +90,8 @@ export default function GameScreen() {
     if (hasFinalizedRunRef.current || failSequenceStartedRef.current) return;
 
     failSequenceStartedRef.current = true;
+    setFailStartMs(performance.now());
+    sfx.fail();
     setRunOutcome(reason);
     setIsPlaying(false);
     setPhase('ended');
@@ -116,44 +123,22 @@ export default function GameScreen() {
     }, FAIL_AUDIO_DURATION_MS);
   }, [clearFailTimeout, finalizeRun, setPhase, setRunOutcome]);
 
-  // Initialize generated hit sound effect
-  useEffect(() => {
-    const generateHitSound = () => {
-      const audioContext = new AudioContext();
-      const duration = 0.1;
-      const sampleRate = audioContext.sampleRate;
-      const buffer = audioContext.createBuffer(1, duration * sampleRate, sampleRate);
-      const data = buffer.getChannelData(0);
-
-      for (let i = 0; i < data.length; i++) {
-        const t = i / sampleRate;
-        // Punchier kick/click sound:
-        // Rapid pitch drop (150Hz -> 0Hz) + fast decay
-        const freq = 150 * Math.exp(-t * 20);
-        const envelope = Math.exp(-t * 50); // Fast decay
-        data[i] = Math.sin(2 * Math.PI * freq * t) * envelope;
-      }
-
-      hitSoundBufferRef.current = buffer;
-      audioContext.close();
-    };
-
-    generateHitSound();
-  }, []);
-
-  // Play hit sound
-  const playHitSound = useCallback(() => {
-    if (!hitSoundBufferRef.current || !audioContextRef.current) return;
-
-    const source = audioContextRef.current.createBufferSource();
-    source.buffer = hitSoundBufferRef.current;
-
-    const hitGain = audioContextRef.current.createGain();
-    hitGain.gain.value = 0.6;
-
-    source.connect(hitGain);
-    hitGain.connect(audioContextRef.current.destination);
-    source.start(0);
+  // Sound cues from the game (hits, misses, finished holds, empty swings).
+  const handleSound = useCallback((event: GameSoundEvent) => {
+    switch (event.kind) {
+      case 'hit':
+        sfx.hit(event.result, event.lane, event.noteType);
+        break;
+      case 'miss':
+        sfx.miss(event.lane);
+        break;
+      case 'swing':
+        sfx.swing(event.lane);
+        break;
+      case 'holdDone':
+        sfx.holdDone(event.lane);
+        break;
+    }
   }, []);
 
   // Handle volume change - update gain node directly
@@ -203,12 +188,25 @@ export default function GameScreen() {
 
     sourceNode.start(0);
     sourceNodeRef.current = sourceNode;
+    sfx.go();
     startTimeRef.current = audioContext.currentTime;
     lastDrainTimeRef.current = 0;
 
     setIsPlaying(true);
     setPhase('playing');
   }, [audioBuffer, clearFailTimeout, finalizeRun, setPhase, setRunOutcome, volume]);
+
+  // A blip on each countdown number (once per number, even if the effect re-runs).
+  const lastBlipRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (phase !== 'countdown' || countdown <= 0) {
+      lastBlipRef.current = null;
+      return;
+    }
+    if (lastBlipRef.current === countdown) return;
+    lastBlipRef.current = countdown;
+    sfx.countdown();
+  }, [phase, countdown]);
 
   // Start countdown and then play
   useEffect(() => {
@@ -252,10 +250,12 @@ export default function GameScreen() {
 
     const deltaSeconds = Math.max(0, currentTime - lastDrainTimeRef.current);
     lastDrainTimeRef.current = currentTime;
-    if (deltaSeconds > 0) {
+    // HP only drains while there's something to play; a long quiet passage
+    // with no notes would otherwise kill a player who hit everything.
+    if (deltaSeconds > 0 && beatmap && isNearNote(beatmap.notes, currentTime)) {
       applyPassiveDrain(deltaSeconds);
     }
-  }, [applyPassiveDrain, currentTime, phase]);
+  }, [applyPassiveDrain, beatmap, currentTime, phase]);
 
   // Defeat checks:
   // - miss streak fails immediately (osu-style),
@@ -377,126 +377,125 @@ export default function GameScreen() {
 
   return (
     <div ref={containerRef} style={styles.container}>
-      {/* Game canvas */}
       <Game
         beatmap={beatmap}
         currentTime={currentTime}
         isPlaying={isPlaying && phase === 'playing'}
         volume={volume}
-        onHit={playHitSound}
-      />
+        onSound={handleSound}
+        countdown={phase === 'countdown' ? countdown : null}
+        fadeStartMs={failStartMs}
+      >
+        <GameHUD
+          onPause={togglePause}
+          volume={volume}
+          onVolumeChange={handleVolumeChange}
+          showVolumeSlider={showVolumeSlider}
+          onToggleVolumeSlider={() => setShowVolumeSlider(!showVolumeSlider)}
+        />
 
-      {/* HUD overlay */}
-      <GameHUD
-        currentTime={currentTime}
-        duration={beatmap.metadata.duration}
-        health={health}
-        missStreak={missStreak}
-        missStreakFail={gameplaySettings.missStreakFail}
-        onPause={togglePause}
-        volume={volume}
-        onVolumeChange={handleVolumeChange}
-        showVolumeSlider={showVolumeSlider}
-        onToggleVolumeSlider={() => setShowVolumeSlider(!showVolumeSlider)}
-      />
-
-      {/* Live beatmap diagnostics overlay */}
-      {phase === 'playing' && debugReport?.enabled && showDebugOverlay && currentDebugWindow && (
-        <div style={styles.debugOverlay}>
-          <div style={styles.debugHeaderRow}>
-            <span style={styles.debugTitle}>Live Mapper Debug</span>
-            <span style={styles.debugHotkey}>F3 to hide</span>
-          </div>
-          <div style={styles.debugTimeRow}>
-            <span>
-              Bin {currentDebugWindow.startSec.toFixed(1)}s-{currentDebugWindow.endSec.toFixed(1)}s
-            </span>
-            <span style={{ ...styles.debugScore, color: debugSeverityColor }}>
-              score {currentDebugWindow.score.toFixed(2)}
-            </span>
-          </div>
-          <div style={styles.debugStatGrid}>
-            <span>NPS {currentDebugWindow.notesPerSecond.toFixed(2)}</span>
-            <span>Max gap {currentDebugWindow.maxGapSec.toFixed(2)}s</span>
-            <span>Lane H {currentDebugWindow.laneEntropy.toFixed(2)}</span>
-            <span>Type H {currentDebugWindow.typeEntropy.toFixed(2)}</span>
-            <span>Streak {currentDebugWindow.longestSameLaneStreak}</span>
-            <span>Notes {currentDebugWindow.notes}</span>
-          </div>
-          <div style={styles.debugLine}>
-            Drops: <span style={styles.debugDetailText}>{currentDropSummary}</span>
-          </div>
-          <div style={styles.debugLine}>
-            Next risk:{' '}
-            <span style={styles.debugDetailText}>
-              {nextRiskWindow
-                ? `${nextRiskWindow.startSec.toFixed(1)}s-${nextRiskWindow.endSec.toFixed(1)}s (score ${nextRiskWindow.score.toFixed(2)})`
-                : 'none'}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {phase === 'playing' && debugReport?.enabled && !showDebugOverlay && (
-        <div style={styles.debugCollapsedHint}>Live Mapper Debug hidden (F3)</div>
-      )}
-
-      {/* Countdown overlay */}
-      {phase === 'countdown' && countdown > 0 && (
-        <div style={styles.countdownOverlay}>
-          <div style={styles.countdownNumber}>{countdown}</div>
-          <div style={styles.countdownControls}>
-            <span style={styles.countdownControlsTitle}>CONTROLS</span>
-            <div style={styles.countdownKeyRow}>
-              <span style={styles.countdownKey}>←</span>
-              <span style={styles.countdownKey}>↑</span>
-              <span style={styles.countdownKey}>→</span>
+        {/* Live beatmap diagnostics overlay */}
+        {phase === 'playing' && debugReport?.enabled && showDebugOverlay && currentDebugWindow && (
+          <div style={styles.debugOverlay}>
+            <div style={styles.debugHeaderRow}>
+              <span style={styles.debugTitle}>Live Mapper Debug</span>
+              <span style={styles.debugHotkey}>F3 to hide</span>
             </div>
-            <p style={styles.countdownHint}>Left / Center / Right lane</p>
-            <p style={styles.countdownAltHint}>A / W / D + SPACE also work</p>
+            <div style={styles.debugTimeRow}>
+              <span>
+                Bin {currentDebugWindow.startSec.toFixed(1)}s-{currentDebugWindow.endSec.toFixed(1)}s
+              </span>
+              <span style={{ ...styles.debugScore, color: debugSeverityColor }}>
+                score {currentDebugWindow.score.toFixed(2)}
+              </span>
+            </div>
+            <div style={styles.debugStatGrid}>
+              <span>NPS {currentDebugWindow.notesPerSecond.toFixed(2)}</span>
+              <span>Max gap {currentDebugWindow.maxGapSec.toFixed(2)}s</span>
+              <span>Lane H {currentDebugWindow.laneEntropy.toFixed(2)}</span>
+              <span>Type H {currentDebugWindow.typeEntropy.toFixed(2)}</span>
+              <span>Streak {currentDebugWindow.longestSameLaneStreak}</span>
+              <span>Notes {currentDebugWindow.notes}</span>
+            </div>
+            <div style={styles.debugLine}>
+              Drops: <span style={styles.debugDetailText}>{currentDropSummary}</span>
+            </div>
+            <div style={styles.debugLine}>
+              Next risk:{' '}
+              <span style={styles.debugDetailText}>
+                {nextRiskWindow
+                  ? `${nextRiskWindow.startSec.toFixed(1)}s-${nextRiskWindow.endSec.toFixed(1)}s (score ${nextRiskWindow.score.toFixed(2)})`
+                  : 'none'}
+              </span>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Pause overlay */}
-      {phase === 'paused' && (
-        <div style={styles.pauseOverlay}>
-          <h2 style={styles.pauseTitle}>Paused</h2>
+        {phase === 'playing' && debugReport?.enabled && !showDebugOverlay && (
+          <div style={styles.debugCollapsedHint}>Live Mapper Debug hidden (F3)</div>
+        )}
 
-          {/* Volume control in pause menu */}
-          <div style={styles.volumeControl}>
-            <span style={styles.volumeLabel}>Music Volume</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={volume}
-              onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-              style={styles.volumeSlider}
-            />
-            <span style={styles.volumeValue}>{Math.round(volume * 100)}%</span>
+        {/* Pause menu */}
+        {phase === 'paused' && (
+          <div style={styles.pauseScrim}>
+            <div className="px-panel" style={styles.pausePanel}>
+              <PxText text="paused" scale={2} style={styles.pauseTitle} />
+
+              <div style={styles.pauseVolume}>
+                <PxText text="music" style={styles.pauseLabel} />
+                <input
+                  className="px-range"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={volume}
+                  onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                  style={styles.pauseRange}
+                  aria-label="Music volume"
+                />
+                <PxText text={Math.round(volume * 100).toString().padStart(3, ' ')} style={styles.pauseValue} />
+              </div>
+
+              <div style={styles.pauseVolume}>
+                <PxText text="fx" style={styles.pauseLabel} />
+                <input
+                  className="px-range"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={sfxVolume}
+                  onChange={(e) => setSfxVolume(parseFloat(e.target.value))}
+                  style={styles.pauseRange}
+                  aria-label="Sound effects volume"
+                />
+                <PxText text={Math.round(sfxVolume * 100).toString().padStart(3, ' ')} style={styles.pauseValue} />
+              </div>
+
+              <div style={styles.pauseMenu}>
+                <button className="px-option" onClick={togglePause} autoFocus>
+                  <PxText text="resume" />
+                </button>
+                <button
+                  className="px-option"
+                  onClick={() => {
+                    ignoreOnEndedRef.current = true;
+                    clearFailTimeout();
+                    closeAudio();
+                    setIsPlaying(false);
+                    setCurrentTime(0);
+                    setCountdown(3);
+                    resetGame();
+                  }}
+                >
+                  <PxText text="quit" />
+                </button>
+              </div>
+            </div>
           </div>
-
-          <button onClick={togglePause} style={styles.resumeButton}>
-            Resume
-          </button>
-          <button
-            onClick={() => {
-              ignoreOnEndedRef.current = true;
-              clearFailTimeout();
-              closeAudio();
-              setIsPlaying(false);
-              setCurrentTime(0);
-              setCountdown(3);
-              resetGame();
-            }}
-            style={{ ...styles.resumeButton, background: 'rgba(60, 55, 70, 0.5)', borderColor: '#4a4555' }}
-          >
-            Quit
-          </button>
-        </div>
-      )}
+        )}
+      </Game>
     </div>
   );
 }
@@ -506,130 +505,49 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%',
     height: '100%',
     position: 'relative',
-    background: '#0d0b0f',
+    background: 'var(--void)',
     overflow: 'hidden',
   },
-  countdownOverlay: {
+  pauseScrim: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: '100%',
+    inset: 0,
     display: 'flex',
-    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'rgba(13, 11, 15, 0.7)',
+    background: 'rgba(10, 10, 16, 0.72)',
     zIndex: 100,
   },
-  countdownNumber: {
-    fontSize: '120px',
-    fontWeight: 700,
-    color: '#c09080',
-    textShadow: '0 0 60px rgba(192, 144, 128, 0.4)',
-  },
-  countdownHint: {
-    margin: 0,
-    fontSize: '14px',
-    color: '#555',
-    fontWeight: 'bold',
-    letterSpacing: '0.4px',
-  },
-  countdownControls: {
-    marginTop: '20px',
-    padding: '16px 24px',
-    minWidth: '280px',
-    background: '#ffffff',
-    border: '2px solid #e0e0e0',
-    borderRadius: '8px',
-    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+  pausePanel: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: '12px',
-    fontFamily: '"Courier New", Courier, monospace',
-  },
-  countdownControlsTitle: {
-    fontSize: '12px',
-    color: '#888',
-    letterSpacing: '2px',
-    fontWeight: 'bold',
-  },
-  countdownKeyRow: {
-    display: 'flex',
-    gap: '8px',
-  },
-  countdownKey: {
-    minWidth: '42px',
-    padding: '8px 12px',
-    borderRadius: '6px',
-    border: '2px solid #e0e0e0',
-    background: '#f9f9f9',
-    color: '#333',
-    fontSize: '22px',
-    fontWeight: 'bold',
-    lineHeight: 1,
-    textAlign: 'center',
-    boxShadow: '0 2px 0 #e0e0e0',
-  },
-  countdownAltHint: {
-    margin: 0,
-    fontSize: '12px',
-    color: '#888',
-    letterSpacing: '0.2px',
-  },
-  pauseOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: '100%',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '16px',
-    background: 'rgba(13, 11, 15, 0.9)',
-    zIndex: 100,
+    gap: 'calc(var(--px) * 4)',
+    padding: 'calc(var(--px) * 8) calc(var(--px) * 12)',
   },
   pauseTitle: {
-    fontSize: '48px',
-    fontWeight: 700,
-    color: '#e0d5c8',
-    marginBottom: '24px',
-    textShadow: '0 0 40px rgba(200, 180, 160, 0.3)',
+    color: 'var(--text)',
   },
-  volumeControl: {
+  pauseVolume: {
     display: 'flex',
     alignItems: 'center',
-    gap: '16px',
-    marginBottom: '24px',
-    padding: '16px 24px',
-    background: 'rgba(200, 180, 160, 0.05)',
-    borderRadius: '12px',
-    border: '1px solid rgba(200, 180, 160, 0.1)',
+    gap: 'calc(var(--px) * 3)',
+    marginTop: 'calc(var(--px) * 4)',
   },
-  volumeLabel: {
-    fontSize: '14px',
-    color: '#8a8090',
-    minWidth: '100px',
+  pauseLabel: {
+    color: 'var(--text-dim)',
   },
-  volumeSlider: {
-    width: '150px',
-    height: '8px',
-    cursor: 'pointer',
-    accentColor: '#c09080',
+  pauseRange: {
+    width: 'calc(var(--px) * 56)',
   },
-  volumeValue: {
-    fontSize: '14px',
-    color: '#e0d5c8',
-    minWidth: '50px',
-    textAlign: 'right',
+  pauseValue: {
+    color: 'var(--text-dim)',
   },
-  resumeButton: {
-    padding: '16px 48px',
-    fontSize: '18px',
-    minWidth: '200px',
+  pauseMenu: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 'calc(var(--px) * 2)',
+    marginTop: 'calc(var(--px) * 2)',
   },
   debugOverlay: {
     position: 'absolute',
@@ -699,6 +617,22 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 25,
   },
 };
+
+/** True when a note was due within the last second or is due within the next two. */
+function isNearNote(notes: { time: number; holdEndTime?: number }[], time: number): boolean {
+  let lo = 0;
+  let hi = notes.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (notes[mid]!.time < time) lo = mid + 1;
+    else hi = mid;
+  }
+  const next = notes[lo];
+  const prev = notes[lo - 1];
+  if (next && next.time - time <= 2) return true;
+  if (prev && time - (prev.holdEndTime ?? prev.time) <= 1) return true;
+  return false;
+}
 
 function formatDebugReason(value: string): string {
   return value

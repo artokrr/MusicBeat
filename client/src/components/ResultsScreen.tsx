@@ -6,6 +6,10 @@ import { downloadBeatmapDebugReport } from '../beatmap/beatmapDebug';
 import { useGameStore } from '../store/gameStore';
 import { DIFFICULTY_PRESETS } from '../types/game';
 
+import { at, u } from '../game/pixel/layout';
+import PxText from '../game/pixel/PxText';
+import SceneBackdrop from './SceneBackdrop';
+
 import type { ChangeEvent } from 'react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
@@ -51,12 +55,12 @@ function toShareErrorMessage(error: unknown): string {
 }
 
 function getGrade(accuracy: number) {
-  if (accuracy >= 95) return { grade: 'S', color: '#ffeb3b' };
-  if (accuracy >= 90) return { grade: 'A', color: '#4d80c9' };
-  if (accuracy >= 80) return { grade: 'B', color: '#7dae5e' };
-  if (accuracy >= 70) return { grade: 'C', color: '#ffa726' };
-  if (accuracy >= 60) return { grade: 'D', color: '#ef5350' };
-  return { grade: 'F', color: '#8d6e63' };
+  if (accuracy >= 95) return { grade: 'S', color: 'var(--perfect)' };
+  if (accuracy >= 90) return { grade: 'A', color: 'var(--good)' };
+  if (accuracy >= 80) return { grade: 'B', color: 'var(--rose)' };
+  if (accuracy >= 70) return { grade: 'C', color: 'var(--ok)' };
+  if (accuracy >= 60) return { grade: 'D', color: 'var(--rose-deep)' };
+  return { grade: 'F', color: 'var(--text-faint)' };
 }
 
 function buildShareUrl(id: string) {
@@ -84,6 +88,7 @@ export default function ResultsScreen() {
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
   const shareCardRef = useRef<HTMLDivElement>(null);
+
 
   const totalNotes = score.perfectCount + score.goodCount + score.okCount + score.missCount;
   const accuracyValue = totalNotes > 0
@@ -227,7 +232,7 @@ export default function ResultsScreen() {
     if (!shareCardRef.current) return;
 
     try {
-      const dataUrl = await toPng(shareCardRef.current, { cacheBust: true });
+      const dataUrl = await toPng(shareCardRef.current, { cacheBust: true, pixelRatio: 2 });
       const link = document.createElement('a');
       link.download = `pong-${safeTitle}.png`;
       link.href = dataUrl;
@@ -245,487 +250,188 @@ export default function ResultsScreen() {
     setCopyMessage('Debug report downloaded.');
   };
 
+  const outcomeTitle = failedReason ? failedReason.toLowerCase() : 'complete';
+  const rows: Array<[string, string, string]> = [
+    ['perfect', score.perfectCount.toString(), 'var(--perfect)'],
+    ['good', score.goodCount.toString(), 'var(--good)'],
+    ['ok', score.okCount.toString(), 'var(--ok)'],
+    ['miss', score.missCount.toString(), 'var(--miss)'],
+    ['combo', `×${score.maxCombo}`, 'var(--text)'],
+  ];
+
+  const [perfectRow, goodRow, okRow, missRow, comboRow] = rows;
+
   return (
-    <div style={styles.container}>
-      <div style={styles.content}>
-        <h1 style={styles.title}>{failed ? 'MATCH FAILED' : 'MATCH RESULTS'}</h1>
+    <SceneBackdrop dim={0.72} glitch={failed}>
+      <PxText text={outcomeTitle} style={at(LEFT, 8, { color: failed ? 'var(--miss)' : 'var(--rose)' })} />
 
-        {failedReason && <p style={styles.failReason}>{failedReason}</p>}
+      {/* Left: the run, also exported as the share card */}
+      <div style={at(LEFT, TOP)}>
+        <div ref={shareCardRef} className="px-panel" style={styles.card}>
+          <PxText text={`@${fitHandle(safeHandle)}`} style={{ color: 'var(--text-dim)' }} />
+          <PxText text={fitTitle(safeTitle)} style={{ color: 'var(--rose)' }} />
 
-        <div style={styles.gradeContainer}>
-          <span style={{ ...styles.grade, color }}>{grade}</span>
-        </div>
-
-        <div style={styles.scoreSection}>
-          <span style={styles.scoreLabel}>Final Score</span>
-          <span style={styles.scoreValue}>{scoreValue.toLocaleString()}</span>
-        </div>
-
-        <div style={styles.statsGrid}>
-          <div style={styles.statItem}>
-            <span style={styles.statValue}>{accuracy}%</span>
-            <span style={styles.statLabel}>Accuracy</span>
-          </div>
-          <div style={styles.statItem}>
-            <span style={styles.statValue}>{score.maxCombo}</span>
-            <span style={styles.statLabel}>Max Combo</span>
-          </div>
-        </div>
-
-        <div style={styles.breakdown}>
-          <div style={styles.breakdownItem}>
-            <span style={{ ...styles.breakdownCount, color: '#ffeb3b' }}>{score.perfectCount}</span>
-            <span style={styles.breakdownLabel}>Perfect</span>
-          </div>
-          <div style={styles.breakdownItem}>
-            <span style={{ ...styles.breakdownCount, color: '#7dae5e' }}>{score.goodCount}</span>
-            <span style={styles.breakdownLabel}>Good</span>
-          </div>
-          <div style={styles.breakdownItem}>
-            <span style={{ ...styles.breakdownCount, color: '#4d80c9' }}>{score.okCount}</span>
-            <span style={styles.breakdownLabel}>OK</span>
-          </div>
-          <div style={styles.breakdownItem}>
-            <span style={{ ...styles.breakdownCount, color: '#ef5350' }}>{score.missCount}</span>
-            <span style={styles.breakdownLabel}>Miss</span>
-          </div>
-        </div>
-
-        <div style={styles.shareSection}>
-          <h2 style={styles.shareTitle}>Share Run</h2>
-          <div style={styles.inputRow}>
-            <label style={styles.inputLabel}>Player Handle</label>
-            <input
-              value={playerHandle}
-              onChange={handleHandleChange}
-              style={styles.input}
-              placeholder="player"
-            />
-          </div>
-          <div style={styles.inputRow}>
-            <label style={styles.inputLabel}>Song Title</label>
-            <input
-              value={songTitle}
-              onChange={handleTitleChange}
-              style={styles.input}
-              placeholder="Untitled Track"
-            />
+          <div style={styles.gradeRow}>
+            <PxText text={grade} scale={3} style={{ color }} />
+            <div style={styles.scoreBlock}>
+              <PxText text={scoreValue.toString().padStart(7, '0')} />
+              <PxText text={`${accuracy}%`} style={{ color: 'var(--text-dim)' }} />
+            </div>
           </div>
 
-          <div style={styles.shareButtons}>
-            <button
-              onClick={handleShare}
-              style={{
-                ...styles.sharePrimaryButton,
-                ...(shareStatus === 'saving' ? styles.shareButtonDisabled : {}),
-              }}
-              disabled={shareStatus === 'saving'}
-            >
-              {shareStatus === 'saving' ? 'Creating Link...' : 'Create Share Link'}
-            </button>
-            <button onClick={handleDownloadCard} style={styles.shareSecondaryButton}>
-              Download Card
-            </button>
-            <button onClick={handleCopyText} style={styles.shareSecondaryButton}>
-              Copy Share Text
-            </button>
-            {debugReport && (
-              <button onClick={handleDownloadDebugReport} style={styles.shareSecondaryButton}>
-                Download Debug JSON
-              </button>
-            )}
-          </div>
-
-          {!debugReport && (
-            <p style={styles.debugHint}>
-              Need mapping diagnostics? Open with <code>?debugBeatmap=1</code> and regenerate the beatmap.
-            </p>
-          )}
-
-          {shareError && <p style={styles.shareError}>{shareError}</p>}
-
-          {shareUrl && (
-            <div style={styles.shareLinkBox}>
-              <span style={styles.shareLinkLabel}>Share Link</span>
-              <div style={styles.shareLinkRow}>
-                <span style={styles.shareLink}>{shareUrl}</span>
-                <button onClick={handleCopyLink} style={styles.shareLinkButton}>
-                  Copy
-                </button>
+          <div style={styles.stats}>
+            {[[perfectRow, goodRow, okRow], [missRow, comboRow]].map((column, i) => (
+              <div key={i} style={styles.statColumn}>
+                {column.map(([label, value, tint]) => (
+                  <div key={label} style={styles.row}>
+                    <PxText text={label} style={{ color: 'var(--text-faint)' }} />
+                    <PxText text={value} style={{ color: tint }} />
+                  </div>
+                ))}
               </div>
-            </div>
-          )}
-          {copyMessage && <span style={styles.copyMessage}>{copyMessage}</span>}
-        </div>
-
-        <div style={styles.shareCardPreview}>
-          <div ref={shareCardRef} style={styles.shareCard}>
-            <div style={styles.shareCardHeader}>
-              <span style={styles.shareCardTitle}>Pong</span>
-              <span style={styles.shareCardHandle}>@{safeHandle}</span>
-            </div>
-            <div style={styles.shareCardSong}>{safeTitle}</div>
-            <div style={styles.shareCardScore}>{scoreValue.toLocaleString()} pts</div>
-            <div style={styles.shareCardStats}>
-              <div style={styles.shareCardStat}>Accuracy {accuracy}%</div>
-              <div style={styles.shareCardStat}>Max Combo {score.maxCombo}</div>
-              <div style={styles.shareCardStat}>BPM {Math.round(bpm)}</div>
-              <div style={styles.shareCardStat}>Diff {difficulty.toUpperCase()}</div>
-            </div>
-            <div style={styles.shareCardFooter}>My wrists survived.</div>
+            ))}
           </div>
-        </div>
-
-        <div style={styles.buttons}>
-          <button onClick={handleRetry} style={styles.primaryButton}>
-            Play Again
-          </button>
-          <button onClick={handleNewSong} style={styles.secondaryButton}>
-            New Song
-          </button>
         </div>
       </div>
-    </div>
+
+      {/* Right: what next, then sharing */}
+      <div style={at(SIDE_X, TOP, styles.side)}>
+        <div style={styles.actions}>
+          <button className="px-option" onClick={handleRetry} autoFocus>
+            <PxText text="play again" />
+          </button>
+          <button className="px-option" onClick={handleNewSong}>
+            <PxText text="new song" />
+          </button>
+        </div>
+
+        <div style={styles.divider} />
+
+        <input
+          className="px-input"
+          value={playerHandle}
+          onChange={handleHandleChange}
+          placeholder="handle"
+          aria-label="Player handle"
+        />
+        <input
+          className="px-input"
+          value={songTitle}
+          onChange={handleTitleChange}
+          placeholder="song title"
+          aria-label="Song title"
+        />
+
+        {shareUrl ? (
+          <div style={styles.linkRow}>
+            <input
+              className="px-input"
+              value={shareUrl}
+              readOnly
+              onFocus={(e) => e.currentTarget.select()}
+              aria-label="Share link"
+            />
+            <button className="px-button" style={styles.copyButton} onClick={handleCopyLink}>
+              <PxText text="copy" />
+            </button>
+          </div>
+        ) : null}
+
+        <div style={styles.actions}>
+          <button className="px-option" onClick={handleShare} disabled={shareStatus === 'saving'}>
+            <PxText text={shareStatus === 'saving' ? 'saving…' : 'share link'} />
+          </button>
+          <button className="px-option" onClick={handleDownloadCard}>
+            <PxText text="save card" />
+          </button>
+          <button className="px-option" onClick={handleCopyText}>
+            <PxText text="copy text" />
+          </button>
+          {debugReport && (
+            <button className="px-option" onClick={handleDownloadDebugReport}>
+              <PxText text="debug json" />
+            </button>
+          )}
+        </div>
+
+        {shareError && <PxText text={shareError.toLowerCase()} maxWidth={SIDE_W} style={{ color: 'var(--miss)' }} />}
+        {copyMessage && <PxText text={copyMessage.toLowerCase()} maxWidth={SIDE_W} style={{ color: 'var(--good)' }} />}
+      </div>
+    </SceneBackdrop>
   );
 }
 
+// Laid out for the 384x216 frame: card on the left, one column of choices on the right.
+const LEFT = 24;
+const TOP = 30;
+const CARD_W = 232;
+const SIDE_X = LEFT + CARD_W + 16;
+const SIDE_W = 384 - SIDE_X - 16;
+
+function fitHandle(handle: string): string {
+  return handle.length > 24 ? `${handle.slice(0, 23)}…` : handle;
+}
+
+function fitTitle(title: string): string {
+  return title.length > 24 ? `${title.slice(0, 23)}…` : title;
+}
+
 const styles: Record<string, React.CSSProperties> = {
-  container: {
-    width: '100%',
-    height: '100%',
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'center',
-    overflowY: 'auto',
-    overflowX: 'hidden',
-    padding: '24px 16px',
-    background: '#f0f0f0',
-    fontFamily: '"Courier New", Courier, monospace',
-  },
-  content: {
-    textAlign: 'center',
-    padding: '40px',
-    maxWidth: '640px',
-    width: '100%',
-    background: '#ffffff',
-    border: '4px solid #333',
-    boxShadow: '10px 10px 0px rgba(0,0,0,0.2)',
-    marginBottom: '24px',
-  },
-  title: {
-    fontSize: '24px',
-    fontWeight: 700,
-    color: '#333',
-    marginBottom: '32px',
-    textTransform: 'uppercase',
-    letterSpacing: '4px',
-  },
-  failReason: {
-    marginTop: '-20px',
-    marginBottom: '24px',
-    color: '#d05050',
-    fontSize: '13px',
-    letterSpacing: '1.5px',
-    textTransform: 'uppercase',
-    fontWeight: 'bold',
-  },
-  gradeContainer: {
-    marginBottom: '40px',
-  },
-  grade: {
-    fontSize: '120px',
-    fontWeight: 900,
-    lineHeight: 1,
-    textShadow: '4px 4px 0px rgba(0,0,0,0.1)',
-    fontFamily: 'Verdana, sans-serif',
-  },
-  scoreSection: {
-    marginBottom: '40px',
-  },
-  scoreLabel: {
-    display: 'block',
-    fontSize: '12px',
-    color: '#888',
-    marginBottom: '8px',
-    textTransform: 'uppercase',
-    letterSpacing: '2px',
-    fontWeight: 'bold',
-  },
-  scoreValue: {
-    fontSize: '40px',
-    fontWeight: 700,
-    color: '#333',
-    letterSpacing: '2px',
-  },
-  statsGrid: {
-    display: 'flex',
-    justifyContent: 'center',
-    gap: '60px',
-    marginBottom: '40px',
-  },
-  statItem: {
+  card: {
+    width: u(CARD_W),
+    padding: `${u(7)} ${u(10)} ${u(8)}`,
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: u(2),
   },
-  statValue: {
-    fontSize: '24px',
-    fontWeight: 700,
-    color: '#333',
-    letterSpacing: '1px',
-  },
-  statLabel: {
-    fontSize: '10px',
-    color: '#888',
-    textTransform: 'uppercase',
-    letterSpacing: '2px',
-    fontWeight: 'bold',
-  },
-  breakdown: {
+  gradeRow: {
     display: 'flex',
-    justifyContent: 'center',
-    gap: '32px',
-    marginBottom: '48px',
-    padding: '20px',
-    border: '2px dashed #ddd',
-    background: '#f9f9f9',
-  },
-  breakdownItem: {
-    display: 'flex',
-    flexDirection: 'column',
     alignItems: 'center',
-    gap: '4px',
-    minWidth: '50px',
+    gap: u(12),
+    margin: `${u(4)} 0`,
   },
-  breakdownCount: {
-    fontSize: '20px',
-    fontWeight: 700,
-    letterSpacing: '1px',
-  },
-  breakdownLabel: {
-    fontSize: '10px',
-    color: '#888',
-    textTransform: 'uppercase',
-    letterSpacing: '1px',
-    fontWeight: 'bold',
-  },
-  shareSection: {
-    textAlign: 'left',
-    padding: '24px',
-    border: '2px solid #eee',
-    background: '#fdfdfd',
-    marginBottom: '32px',
-  },
-  shareTitle: {
-    fontSize: '16px',
-    fontWeight: 700,
-    color: '#333',
-    marginBottom: '16px',
-    textTransform: 'uppercase',
-    letterSpacing: '2px',
-  },
-  inputRow: {
+  scoreBlock: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px',
-    marginBottom: '12px',
+    gap: u(2),
   },
-  inputLabel: {
-    fontSize: '11px',
-    color: '#777',
-    textTransform: 'uppercase',
-    letterSpacing: '1.5px',
-    fontWeight: 'bold',
-  },
-  input: {
-    padding: '10px 12px',
-    border: '2px solid #ccc',
-    fontSize: '14px',
-    fontFamily: '"Courier New", Courier, monospace',
-    outline: 'none',
-  },
-  shareButtons: {
+  stats: {
     display: 'flex',
-    flexWrap: 'wrap',
-    gap: '12px',
-    marginTop: '12px',
+    gap: u(16),
+    paddingTop: u(5),
+    borderTop: `${u(1)} solid var(--hud-line)`,
   },
-  sharePrimaryButton: {
-    padding: '12px 18px',
-    fontSize: '12px',
-    background: '#4d80c9',
-    border: 'none',
-    color: '#fff',
-    cursor: 'pointer',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-    fontFamily: '"Courier New", Courier, monospace',
-    fontWeight: 'bold',
-    boxShadow: '0 3px 0 #365f9b',
-  },
-  shareSecondaryButton: {
-    padding: '12px 18px',
-    fontSize: '12px',
-    background: '#fff',
-    border: '2px solid #ccc',
-    color: '#666',
-    cursor: 'pointer',
-    letterSpacing: '1px',
-    textTransform: 'uppercase',
-    fontFamily: '"Courier New", Courier, monospace',
-    fontWeight: 'bold',
-    boxShadow: '0 3px 0 #bbb',
-  },
-  shareButtonDisabled: {
-    opacity: 0.6,
-    cursor: 'default',
-  },
-  shareError: {
-    marginTop: '12px',
-    color: '#d05050',
-    fontSize: '12px',
-    letterSpacing: '1px',
-  },
-  debugHint: {
-    marginTop: '12px',
-    marginBottom: 0,
-    color: '#666',
-    fontSize: '11px',
-    letterSpacing: '0.5px',
-  },
-  shareLinkBox: {
-    marginTop: '16px',
-    padding: '12px',
-    border: '2px dashed #ddd',
-    background: '#f9f9f9',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-  },
-  shareLinkLabel: {
-    fontSize: '10px',
-    textTransform: 'uppercase',
-    letterSpacing: '1.5px',
-    fontWeight: 'bold',
-    color: '#666',
-  },
-  shareLinkRow: {
-    display: 'flex',
-    gap: '10px',
-    alignItems: 'center',
-  },
-  shareLink: {
+  statColumn: {
     flex: 1,
-    fontSize: '12px',
-    wordBreak: 'break-all',
-    color: '#333',
+    display: 'flex',
+    flexDirection: 'column',
   },
-  shareLinkButton: {
-    padding: '8px 12px',
-    border: '2px solid #ccc',
-    background: '#fff',
-    fontSize: '11px',
-    letterSpacing: '1px',
-    cursor: 'pointer',
-    textTransform: 'uppercase',
-    fontFamily: '"Courier New", Courier, monospace',
-    fontWeight: 'bold',
-  },
-  copyMessage: {
-    fontSize: '11px',
-    color: '#4d80c9',
-    letterSpacing: '1px',
-  },
-  shareCardPreview: {
-    marginBottom: '32px',
-  },
-  shareCard: {
-    padding: '24px',
-    border: '3px solid #333',
-    background: '#ffffff',
-    boxShadow: '6px 6px 0px rgba(0,0,0,0.15)',
-    textAlign: 'left',
-  },
-  shareCardHeader: {
+  row: {
     display: 'flex',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '12px',
   },
-  shareCardTitle: {
-    fontSize: '18px',
-    fontWeight: 700,
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-  },
-  shareCardHandle: {
-    fontSize: '12px',
-    color: '#666',
-    letterSpacing: '1px',
-  },
-  shareCardSong: {
-    fontSize: '16px',
-    fontWeight: 700,
-    marginBottom: '12px',
-    color: '#4d80c9',
-  },
-  shareCardScore: {
-    fontSize: '32px',
-    fontWeight: 900,
-    marginBottom: '12px',
-    letterSpacing: '1px',
-  },
-  shareCardStats: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    gap: '8px 16px',
-    marginBottom: '16px',
-    fontSize: '12px',
-    textTransform: 'uppercase',
-    letterSpacing: '1px',
-  },
-  shareCardStat: {
-    fontWeight: 'bold',
-    color: '#444',
-  },
-  shareCardFooter: {
-    fontSize: '12px',
-    color: '#888',
-    letterSpacing: '1px',
-  },
-  buttons: {
+  side: {
+    width: u(SIDE_W),
     display: 'flex',
-    gap: '16px',
-    justifyContent: 'center',
+    flexDirection: 'column',
+    gap: u(4),
   },
-  primaryButton: {
-    padding: '14px 28px',
-    fontSize: '14px',
-    background: '#4d80c9',
-    border: 'none',
-    color: '#fff',
-    cursor: 'pointer',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-    minWidth: '160px',
-    fontFamily: '"Courier New", Courier, monospace',
-    fontWeight: 'bold',
-    boxShadow: '0 4px 0 #365f9b',
-    transition: 'transform 0.1s',
+  actions: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    marginLeft: u(-9),
   },
-  secondaryButton: {
-    padding: '14px 28px',
-    fontSize: '14px',
-    background: '#fff',
-    border: '2px solid #ccc',
-    color: '#666',
-    cursor: 'pointer',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-    minWidth: '160px',
-    fontFamily: '"Courier New", Courier, monospace',
-    fontWeight: 'bold',
-    boxShadow: '0 4px 0 #bbb',
-    transition: 'transform 0.1s',
+  divider: {
+    height: u(1),
+    background: 'var(--hud-line)',
+    margin: `${u(1)} 0`,
+  },
+  linkRow: {
+    display: 'flex',
+    gap: u(2),
+  },
+  copyButton: {
+    padding: `0 ${u(3)}`,
   },
 };

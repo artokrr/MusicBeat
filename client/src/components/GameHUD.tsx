@@ -1,11 +1,11 @@
-import { useGameStore } from '../store/gameStore';
+import PxText from '../game/pixel/PxText';
+import { HUD_PAUSE_RECT, HUD_VOLUME_RECT, LOW_H, LOW_W } from '../game/pixel/stage';
+
+// The HUD itself is drawn into the game canvas (see game/pixel/hud.ts). This
+// component only places clickable areas over the pause and volume icons, and
+// the volume popover.
 
 interface GameHUDProps {
-  currentTime: number;
-  duration: number;
-  health: number;
-  missStreak: number;
-  missStreakFail: number | null;
   onPause: () => void;
   volume: number;
   onVolumeChange: (volume: number) => void;
@@ -13,308 +13,73 @@ interface GameHUDProps {
   onToggleVolumeSlider: () => void;
 }
 
-export default function GameHUD({
-  currentTime,
-  duration,
-  health,
-  missStreak,
-  missStreakFail,
-  onPause,
-  volume,
-  onVolumeChange,
-  showVolumeSlider,
-  onToggleVolumeSlider,
-}: GameHUDProps) {
-  const score = useGameStore((state) => state.score);
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+function areaStyle(rect: { x: number; y: number; w: number; h: number }): React.CSSProperties {
+  return {
+    position: 'absolute',
+    left: `${(rect.x / LOW_W) * 100}%`,
+    top: `${(rect.y / LOW_H) * 100}%`,
+    width: `${(rect.w / LOW_W) * 100}%`,
+    height: `${(rect.h / LOW_H) * 100}%`,
   };
+}
 
-  const progress = Math.min((currentTime / duration) * 100, 100);
-  const healthPercent = Math.round(health * 100);
-  const healthColor = healthPercent > 60 ? '#48a868' : healthPercent > 30 ? '#f2a23a' : '#d05050';
-
+export default function GameHUD({ onPause, volume, onVolumeChange, showVolumeSlider, onToggleVolumeSlider }: GameHUDProps) {
   return (
-    <div style={styles.container}>
-      {/* Top Bar - White Box Design */}
-      <div style={styles.topBarContainer}>
-        <div style={styles.scoreBox}>
-          {/* Score */}
-          <div style={styles.scoreSection}>
-            <span style={styles.label}>SCORE</span>
-            <span style={styles.value}>{Math.floor(score.score).toLocaleString()}</span>
-          </div>
-          
-          <div style={styles.divider} />
+    <>
+      <button
+        style={{ ...areaStyle(HUD_PAUSE_RECT), ...styles.hitArea }}
+        onClick={onPause}
+        title="Pause (Esc)"
+        aria-label="Pause"
+      />
+      <button
+        style={{ ...areaStyle(HUD_VOLUME_RECT), ...styles.hitArea }}
+        onClick={onToggleVolumeSlider}
+        title="Volume"
+        aria-label="Volume"
+        aria-expanded={showVolumeSlider}
+      />
 
-          {/* Combo */}
-          <div style={styles.scoreSection}>
-            <span style={styles.label}>COMBO</span>
-            <span style={styles.value}>{score.combo}</span>
-          </div>
-        </div>
-
-        <div style={styles.hpBox}>
-          <div style={styles.hpHeader}>
-            <span style={styles.label}>HP</span>
-            <span style={styles.hpValue}>{healthPercent}%</span>
-          </div>
-          <div style={styles.hpTrack}>
-            <div
-              style={{
-                ...styles.hpFill,
-                width: `${healthPercent}%`,
-                background: healthColor,
-              }}
-            />
-          </div>
-          {missStreakFail !== null && (
-            <span style={styles.hpStreakText}>
-              Miss Streak {missStreak}/{missStreakFail}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Controls - Top Right */}
-      <div style={styles.controlsContainer}>
-        {/* Volume button */}
-        <div style={styles.volumeContainer}>
-          <button
-            onClick={onToggleVolumeSlider}
-            style={styles.controlButton}
-            title="Volume"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              {volume > 0.5 ? (
-                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
-              ) : volume > 0 ? (
-                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
-              ) : (
-                <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
-              )}
-            </svg>
-          </button>
-
-          {/* Volume slider dropdown */}
-          {showVolumeSlider && (
-            <div style={styles.volumeSliderContainer}>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={volume}
-                onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-                style={styles.volumeSlider}
-              />
-              <span style={styles.volumeText}>{Math.round(volume * 100)}%</span>
-            </div>
-          )}
-        </div>
-
-        {/* Pause button */}
-        <button onClick={onPause} style={styles.controlButton} title="Pause (ESC)">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="4" width="4" height="16" />
-            <rect x="14" y="4" width="4" height="16" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Progress bar at bottom */}
-      <div style={styles.progressContainer}>
-        <span style={styles.timeText}>{formatTime(currentTime)}</span>
-        <div style={styles.progressTrack}>
-          <div
-            style={{
-              ...styles.progressBar,
-              width: `${progress}%`,
-            }}
+      {showVolumeSlider && (
+        <div className="px-panel" style={styles.popover}>
+          <input
+            className="px-range"
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={volume}
+            onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+            style={styles.range}
+            aria-label="Music volume"
           />
+          <PxText text={Math.round(volume * 100).toString().padStart(3, ' ')} style={styles.value} />
         </div>
-        <span style={styles.timeText}>{formatTime(duration)}</span>
-      </div>
-    </div>
+      )}
+    </>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: {
+  hitArea: {
+    padding: 0,
+    background: 'transparent',
+    zIndex: 20,
+  },
+  popover: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: '100%',
-    pointerEvents: 'none',
-    display: 'flex',
-    flexDirection: 'column',
-    justifyContent: 'space-between',
-    padding: '20px',
-    zIndex: 10,
-    fontFamily: '"Courier New", Courier, monospace',
-  },
-  topBarContainer: {
-    display: 'flex',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: '12px',
-    width: '100%',
-  },
-  scoreBox: {
-    background: '#ffffff',
-    padding: '10px 20px',
-    borderRadius: '8px',
+    right: 'calc(var(--px) * 2)',
+    bottom: 'calc(var(--px) * 14)',
     display: 'flex',
     alignItems: 'center',
-    gap: '20px',
-    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-    border: '2px solid #e0e0e0',
+    gap: 'calc(var(--px) * 3)',
+    padding: 'calc(var(--px) * 3) calc(var(--px) * 4)',
+    zIndex: 30,
   },
-  scoreSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-  },
-  divider: {
-    width: '1px',
-    height: '30px',
-    background: '#e0e0e0',
-  },
-  hpBox: {
-    background: '#ffffff',
-    padding: '10px 14px',
-    borderRadius: '8px',
-    minWidth: '170px',
-    border: '2px solid #e0e0e0',
-    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '6px',
-  },
-  hpHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  hpValue: {
-    fontSize: '12px',
-    color: '#555',
-    fontWeight: 'bold',
-    letterSpacing: '1px',
-  },
-  hpTrack: {
-    width: '100%',
-    height: '8px',
-    background: '#e5e5e5',
-    borderRadius: '999px',
-    overflow: 'hidden',
-  },
-  hpFill: {
-    height: '100%',
-    borderRadius: '999px',
-    transition: 'width 0.1s linear',
-  },
-  hpStreakText: {
-    fontSize: '10px',
-    color: '#777',
-    letterSpacing: '0.7px',
-  },
-  label: {
-    fontSize: '10px',
-    color: '#888',
-    fontWeight: 'bold',
-    letterSpacing: '1px',
+  range: {
+    width: 'calc(var(--px) * 48)',
   },
   value: {
-    fontSize: '24px',
-    fontWeight: 'bold',
-    color: '#333',
-    lineHeight: '1',
-  },
-  controlsContainer: {
-    position: 'absolute',
-    top: '20px',
-    right: '20px',
-    display: 'flex',
-    gap: '8px',
-    alignItems: 'flex-start',
-  },
-  volumeContainer: {
-    position: 'relative',
-  },
-  controlButton: {
-    pointerEvents: 'auto',
-    background: '#ffffff',
-    border: '2px solid #e0e0e0',
-    borderRadius: '8px',
-    padding: '8px',
-    color: '#555',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-  },
-  volumeSliderContainer: {
-    position: 'absolute',
-    top: '100%',
-    right: 0,
-    marginTop: '8px',
-    background: '#ffffff',
-    border: '2px solid #e0e0e0',
-    borderRadius: '8px',
-    padding: '12px 16px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    alignItems: 'center',
-    pointerEvents: 'auto',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-  },
-  volumeSlider: {
-    width: '100px',
-    cursor: 'pointer',
-    accentColor: '#4d80c9',
-  },
-  volumeText: {
-    fontSize: '10px',
-    color: '#555',
-    letterSpacing: '1px',
-  },
-  progressContainer: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    background: 'rgba(255, 255, 255, 0.9)',
-    padding: '8px 16px',
-    borderRadius: '20px',
-    alignSelf: 'center',
-    width: '60%',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-  },
-  progressTrack: {
-    flex: 1,
-    height: '6px',
-    background: '#e0e0e0',
-    borderRadius: '3px',
-    overflow: 'hidden',
-  },
-  progressBar: {
-    height: '100%',
-    background: '#4d80c9',
-    transition: 'width 0.1s linear',
-    borderRadius: '3px',
-  },
-  timeText: {
-    fontSize: '12px',
-    color: '#555',
-    fontWeight: 'bold',
-    minWidth: '45px',
-    textAlign: 'center',
+    color: 'var(--text-dim)',
   },
 };

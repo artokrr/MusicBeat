@@ -1,687 +1,626 @@
-import { isBeatmapDebugEnabled } from '../beatmap/beatmapDebug';
+// Song analysis for map generation.
+//
+// One streaming pass over a 22.05 kHz spectrogram (1024-point FFT, 256 hop,
+// ~86 frames/s) keeps only a few dozen numbers per frame:
+//   - band-wise SuperFlux onset strength (log-magnitude rises against a
+//     frequency-max-filtered frame two hops back, so vibrato doesn't count),
+//   - a slow flux (frames ~0.12 s apart) for sounds that swell in,
+//   - energies (total, low, mid, high), mid-band spectral flatness, chroma.
+// From those: tempo (autocorrelation with a prior toward a playable pulse),
+// beats (Ellis dynamic programming, follows drift), onset events with
+// band/pitch/sustain/loudness descriptors, bar starts, swing feel, and a
+// per-beat intensity curve.
 
-import type { BeatAnalysis, BeatDetectorDebug, DetectedBeat } from '../types/beatmap';
+import { clamp01, fft, mixToMono, movingAverage, percentile, resample } from './dsp';
 
-export async function analyzeBeatmap(audioBuffer: AudioBuffer): Promise<BeatAnalysis> {
-  const debugEnabled = isBeatmapDebugEnabled();
-  const monoData = mixToMono(audioBuffer);
-  const sampleRate = audioBuffer.sampleRate;
+import type { BeatAnalysis, OnsetEvent } from '../types/beatmap';
 
-  // 1. Detect BPM
-  const bpm = await detectBPM(monoData, sampleRate);
+const ANALYSIS_RATE = 22050;
+const N_FFT = 1024;
+const HOP = 256;
+/** Hz edges of the four bands used for flux and onset descriptors. */
+const BAND_EDGES = [30, 150, 500, 3000, 10000];
+const MIN_BPM = 60;
+const MAX_BPM = 200;
+const PRIOR_CENTER_BPM = 115;
+const PRIOR_WIDTH_OCTAVES = 0.75;
+const DP_TIGHTNESS = 120;
+const FLUX_LAG = 2;
+const SLOW_LAG_SEC = 0.12;
 
-  // 2. Detect raw beat onsets using multiple methods
-  const energyBeats = detectBeatsEnergy(monoData, sampleRate);
-  const bassBeats = detectBassBeats(monoData, sampleRate);
+export type AudioLike = Pick<AudioBuffer, 'numberOfChannels' | 'getChannelData' | 'length' | 'sampleRate' | 'duration'>;
 
-  // Merge and deduplicate
-  const rawBeats = mergeBeats([...energyBeats, ...bassBeats], 0.05);
+interface Features {
+  frames: number;
+  frameRate: number;
+  frameTime: (f: number) => number;
+  bandFlux: Float32Array[];
+  fluxPitch: Float32Array;
+  slowFlux: Float32Array;
+  slowPitch: Float32Array;
+  energy: Float32Array;
+  low: Float32Array;
+  high: Float32Array;
+  mid: Float32Array;
+  flatness: Float32Array;
+  chroma: Float32Array; // frames x 12
+}
 
-  // 3. Find the "Offset" (The timestamp of the first strong beat)
-  const offset = findBeatOffset(rawBeats, bpm);
+export async function analyzeBeatmap(audioBuffer: AudioLike): Promise<BeatAnalysis> {
+  const duration = audioBuffer.duration;
+  const signal = resample(mixToMono(audioBuffer), audioBuffer.sampleRate, ANALYSIS_RATE);
+  const feat = extractFeatures(signal);
+  const { frames, frameRate, frameTime, bandFlux } = feat;
 
-  // 4. Generate a clean grid based on BPM + Offset
-  const gridBeats = generateRhythmicGrid(rawBeats, bpm, offset, audioBuffer.duration);
-  let beats = gridBeats;
+  // Balance bands so hi-hats (many bins) don't drown out kicks (few bins).
+  const bandScale = bandFlux.map((flux) => 1 / Math.max(1e-6, percentile(flux, 95)));
+  const odf = weightedFlux(bandFlux, bandScale, [1.0, 0.8, 1.0, 0.7]);
 
-  // 5. Fallback only when both grid output and raw detections are very sparse.
-  // This keeps nuanced detection data for energetic tracks instead of flattening them.
-  const expectedBeats = Math.floor((audioBuffer.duration * bpm) / 60);
-  const minimumDetectedBeats = Math.max(12, Math.floor(expectedBeats * 0.12));
-  const minimumRawBeats = Math.max(8, Math.floor(expectedBeats * 0.08));
-  let usedFallback = false;
-  let fallbackReason: BeatDetectorDebug['fallbackReason'];
-  if (
-    beats.length === 0 ||
-    (beats.length < minimumDetectedBeats && rawBeats.length < minimumRawBeats)
-  ) {
-    fallbackReason = beats.length === 0 ? 'empty_grid' : 'sparse_grid_and_raw';
-    beats = generateRegularGrid(bpm, offset, audioBuffer.duration);
-    usedFallback = true;
+  // Pulse curve for tempo and beats: the beat lives in kick and snare; off-beat
+  // hi-hats would otherwise pull it half a beat late.
+  const pulse = weightedFlux(bandFlux, bandScale, [1.6, 1.0, 0.8, 0.35]);
+  const pulseMean = movingAverage(pulse, Math.round(frameRate * 0.25));
+  const novelty = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) novelty[f] = Math.max(0, pulse[f]! - pulseMean[f]!);
+  let sq = 0;
+  for (const v of novelty) sq += v * v;
+  const std = Math.sqrt(sq / Math.max(1, frames)) || 1;
+  for (let f = 0; f < frames; f++) novelty[f] = novelty[f]! / std;
+
+  const tempo = estimateTempo(novelty, frameRate);
+  const period = (60 / tempo.bpm) * frameRate;
+  const beatFrames = trimToActiveRegion(trackBeats(novelty, period), novelty, frameRate);
+  let beatTimes = beatFrames.map(frameTime);
+
+  const usedFallback = tempo.confidence < 0.12 || beatTimes.length < 8;
+  if (beatTimes.length < 2) {
+    // No pulse at all: lay a nominal grid so the generator still has bars to group by.
+    beatTimes = [];
+    for (let t = 0.5; t < duration; t += 60 / tempo.bpm) beatTimes.push(t);
   }
 
-  // Enrich beats with a lightweight sustain score for hold/slider placement.
-  // (Even if fallback triggers, this is harmless; generator can decide to ignore it.)
-  enrichBeatsWithSustain(beats, monoData, sampleRate);
+  const peakRef = Math.max(1e-6, percentile(novelty, 97));
+  const beatStrength = beatTimes.map((t) => {
+    const f = Math.round(t * frameRate - N_FFT / 2 / HOP);
+    let m = 0;
+    for (let d = -2; d <= 2; d++) m = Math.max(m, novelty[f + d] ?? 0);
+    return clamp01(m / peakRef);
+  });
+
+  const frameDb = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) frameDb[f] = 10 * Math.log10(1e-10 + feat.energy[f]!);
+  const loudRef = percentile(frameDb, 95);
+
+  const onsets = pickOnsets(feat, odf, bandScale, frameDb, loudRef);
+  addSoftOnsets(onsets, feat, frameDb, loudRef);
+
+  const perBeat = summarizeBeats(beatTimes, duration, feat, onsets);
+  const downbeatOffset = findDownbeatOffset(beatTimes, onsets, perBeat.chroma);
+  const subdivision = detectSubdivision(beatTimes, odf, frameRate, frameTime);
+  const { intensity, lowWeight } = computeIntensity(perBeat);
 
   return {
-    bpm,
-    beats,
-    duration: audioBuffer.duration,
+    bpm: Math.round(tempo.bpm * 10) / 10,
+    beatTimes,
+    beatStrength,
+    downbeatOffset,
+    subdivision,
+    onsets,
+    intensity,
+    lowWeight,
+    duration,
     usedFallback,
-    debug: debugEnabled
-      ? {
-        enabled: true,
-        detector: {
-          sampleRate,
-          offsetSec: offset,
-          expectedBeats,
-          minimumDetectedBeats,
-          minimumRawBeats,
-          fallbackReason,
-          largestRawGapSec: calculateLargestGapSec(rawBeats, audioBuffer.duration),
-          largestGridGapSec: calculateLargestGapSec(gridBeats, audioBuffer.duration),
-          stageCounts: {
-            energyBeats: energyBeats.length,
-            bassBeats: bassBeats.length,
-            rawMergedBeats: rawBeats.length,
-            gridBeats: gridBeats.length,
-            finalDetectedBeats: beats.length,
-          },
-        },
-      }
-      : undefined,
+    analysisStats: {
+      tempoConfidence: Number(tempo.confidence.toFixed(3)),
+      onsetCount: onsets.length,
+      beatCount: beatTimes.length,
+    },
   };
 }
 
-/**
- * Fallback: Generate a regular grid of beats without energy detection
- */
-function generateRegularGrid(bpm: number, offset: number, duration: number): DetectedBeat[] {
-  const beats: DetectedBeat[] = [];
-  const beatInterval = 60 / bpm;
-  let beatIndex = 0;
+// ---------- Streaming feature extraction ----------
 
-  for (let t = offset; t < duration; t += beatInterval) {
-    const measurePosition = beatIndex % 4;
-    const phrasePosition = beatIndex % 16;
-    const phraseLift = phrasePosition >= 12 ? 0.08 : 0;
-
-    let energy = 0.58 + phraseLift;
-    if (measurePosition === 0) {
-      energy = 0.9 + phraseLift;
-    } else if (measurePosition === 2) {
-      energy = 0.72 + phraseLift;
-    } else if (bpm >= 150 && measurePosition === 1) {
-      energy = 0.64 + phraseLift;
-    }
-
-    beats.push({
-      time: t,
-      energy: clamp01(energy),
-      isBass: measurePosition === 0 || (bpm >= 150 && measurePosition === 2),
-    });
-    beatIndex++;
+function extractFeatures(signal: Float32Array): Features {
+  const frames = Math.max(1, Math.floor((signal.length - N_FFT) / HOP) + 1);
+  const frameRate = ANALYSIS_RATE / HOP;
+  const binHz = ANALYSIS_RATE / N_FFT;
+  const bins = N_FFT / 2 + 1;
+  const bin = (hz: number) => Math.min(bins - 1, Math.round(hz / binHz));
+  const bandBins = BAND_EDGES.map(bin);
+  const lowHi = bin(150);
+  const highLo = bin(3000);
+  const midLo = bin(150);
+  const midHi = bin(4000);
+  const slowLo = bin(80);
+  const slowHi = bin(5000);
+  const slowLag = Math.max(FLUX_LAG + 1, Math.round(frameRate * SLOW_LAG_SEC));
+  const logHz = new Float32Array(bins);
+  const pitchClass = new Int8Array(bins).fill(-1);
+  for (let k = 1; k < bins; k++) {
+    const hz = k * binHz;
+    logHz[k] = Math.log2(hz);
+    if (hz >= 80 && hz <= 2000) pitchClass[k] = (((Math.round(12 * Math.log2(hz / 440)) + 69) % 12) + 12) % 12;
   }
 
-  return beats;
-}
+  const window = new Float64Array(N_FFT);
+  for (let i = 0; i < N_FFT; i++) window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N_FFT);
+  const re = new Float64Array(N_FFT);
+  const im = new Float64Array(N_FFT);
+  // Ring buffer of recent log-magnitude frames (enough for the slow lag).
+  const ringSize = slowLag + 1;
+  const ring = Array.from({ length: ringSize }, () => new Float32Array(bins));
 
-function mixToMono(audioBuffer: AudioBuffer): Float32Array {
-  if (audioBuffer.numberOfChannels === 1) return audioBuffer.getChannelData(0);
-  const left = audioBuffer.getChannelData(0);
-  const right = audioBuffer.getChannelData(1);
-  const mono = new Float32Array(left.length);
-  for (let i = 0; i < left.length; i++) mono[i] = (left[i] + right[i]) / 2;
-  return mono;
-}
-
-function enrichBeatsWithSustain(beats: DetectedBeat[], samples: Float32Array, sampleRate: number) {
-  if (beats.length === 0) return;
-
-  const { rms, hopSize } = computeRmsEnvelope(samples, sampleRate);
-  if (rms.length === 0) return;
-
-  let minRms = Infinity;
-  let maxRms = -Infinity;
-  for (const v of rms) {
-    if (v < minRms) minRms = v;
-    if (v > maxRms) maxRms = v;
-  }
-
-  const hopSec = hopSize / sampleRate;
-  const windowSec = 0.25;
-  const windowRadius = Math.max(1, Math.round(windowSec / hopSec));
-
-  for (const beat of beats) {
-    const centerIndex = Math.round(beat.time / hopSec);
-    const start = Math.max(0, centerIndex - windowRadius);
-    const end = Math.min(rms.length - 1, centerIndex + windowRadius);
-
-    let sum = 0;
-    let count = 0;
-    let deltaSum = 0;
-    let deltaCount = 0;
-
-    for (let i = start; i <= end; i++) {
-      const v = rms[i];
-      sum += v;
-      count++;
-
-      if (i > start) {
-        deltaSum += Math.abs(v - rms[i - 1]);
-        deltaCount++;
-      }
-    }
-
-    const mean = count > 0 ? sum / count : 0;
-    const meanAbsDelta = deltaCount > 0 ? deltaSum / deltaCount : 0;
-
-    const normalizedRms = (mean - minRms) / (maxRms - minRms + 1e-6);
-
-    // Delta relative to loudness: lower means more "sustained".
-    const deltaRatio = meanAbsDelta / (mean + 1e-6);
-
-    // Tuned empirically: 0.0 = very stable, ~0.4+ = very transient.
-    const stability = 1 - clamp01(deltaRatio / 0.4);
-
-    beat.sustain = clamp01(normalizedRms * stability);
-  }
-}
-
-function computeRmsEnvelope(samples: Float32Array, sampleRate: number): { rms: number[]; hopSize: number } {
-  const hopSize = Math.floor(sampleRate / 50); // ~20ms
-  const frameSize = Math.floor(sampleRate / 20); // ~50ms
-  const rms: number[] = [];
-
-  for (let i = 0; i < samples.length - frameSize; i += hopSize) {
-    let sum = 0;
-    for (let j = 0; j < frameSize; j++) {
-      const v = samples[i + j];
-      sum += v * v;
-    }
-    rms.push(Math.sqrt(sum / frameSize));
-  }
-
-  return { rms, hopSize };
-}
-
-function clamp01(value: number): number {
-  if (value <= 0) return 0;
-  if (value >= 1) return 1;
-  return value;
-}
-
-function calculateLargestGapSec(beats: DetectedBeat[], duration: number): number {
-  if (duration <= 0) return 0;
-  if (beats.length === 0) return duration;
-
-  let largestGap = beats[0]!.time;
-  for (let i = 1; i < beats.length; i++) {
-    const gap = beats[i]!.time - beats[i - 1]!.time;
-    if (gap > largestGap) largestGap = gap;
-  }
-
-  const trailingGap = duration - beats[beats.length - 1]!.time;
-  if (trailingGap > largestGap) largestGap = trailingGap;
-
-  return Math.max(0, largestGap);
-}
-
-/**
- * Finds the first reliable beat to align the grid to.
- */
-function findBeatOffset(rawBeats: DetectedBeat[], bpm: number): number {
-  if (rawBeats.length === 0) return 0;
-
-  // Look at the first 10 seconds only
-  const earlyBeats = rawBeats.filter(b => b.time < 10.0);
-  if (earlyBeats.length === 0) return rawBeats[0]?.time || 0;
-
-  const beatInterval = 60 / bpm;
-
-  // Simple Phase matching
-  let bestOffset = 0;
-  let maxConsensus = -1;
-
-  // Check up to first 5 detected peaks to serve as the "Downbeat"
-  const candidates = earlyBeats.slice(0, 5);
-
-  for (const candidate of candidates) {
-    let consensus = 0;
-    // Check how many other beats fall on this candidate's grid
-    for (const beat of earlyBeats) {
-      const dist = Math.abs(beat.time - candidate.time);
-      const cycles = Math.round(dist / beatInterval);
-      const error = Math.abs(dist - (cycles * beatInterval));
-
-      // If error is less than 15% of a beat, it fits the grid
-      if (error < beatInterval * 0.15) {
-        consensus++;
-      }
-    }
-
-    if (consensus > maxConsensus) {
-      maxConsensus = consensus;
-      bestOffset = candidate.time;
-    }
-  }
-
-  // Normalize offset to be as close to 0 as possible while keeping phase
-  while (bestOffset >= beatInterval) {
-    bestOffset -= beatInterval;
-  }
-
-  return Math.max(0, bestOffset);
-}
-
-/**
- * Generates a rhythmic grid, keeping beats that align AND off-grid beats that are strong.
- * This preserves syncopation and build-up patterns.
- */
-function generateRhythmicGrid(rawBeats: DetectedBeat[], bpm: number, offset: number, duration: number): DetectedBeat[] {
-  if (rawBeats.length === 0) return [];
-
-  const sortedRawBeats = [...rawBeats].sort((a, b) => a.time - b.time);
-  const finalBeats: DetectedBeat[] = [];
-  const beatInterval = 60 / bpm;
-
-  // Wider tolerance windows
-  const mainWindow = 0.10; // 100ms for main beats
-  const halfWindow = 0.08; // 80ms for half-beats
-  const quarterWindow = 0.06; // 60ms for quarter-beats (16ths)
-
-  // Calculate average energy to identify strong off-grid beats
-  const avgEnergy = sortedRawBeats.reduce((sum, b) => sum + b.energy, 0) / sortedRawBeats.length;
-  const energyVariance = sortedRawBeats.reduce((sum, beat) => {
-      const delta = beat.energy - avgEnergy;
-      return sum + delta * delta;
-    }, 0) / sortedRawBeats.length;
-  const energyStdDev = Math.sqrt(energyVariance);
-  const quarterEnergyThreshold = avgEnergy > 0
-    ? Math.max(
-      avgEnergy * (bpm >= 150 ? 1.12 : 1.25),
-      avgEnergy + energyStdDev * (bpm >= 150 ? 0.1 : 0.25),
-    )
-    : 0;
-
-  // Track which raw beats have been used
-  const usedBeats = new Set<number>();
-  const quantizedNudgeWindowSec = Math.min(0.045, beatInterval * 0.16);
-
-  // Iterate through the IDEAL grid (main beats)
-  for (let t = offset; t < duration; t += beatInterval) {
-    const mainMatch = findStrongestNearbyBeat({
-      beats: sortedRawBeats,
-      usedBeatIndexes: usedBeats,
-      targetTime: t,
-      windowSec: mainWindow,
-    });
-
-    if (mainMatch !== undefined) {
-      const alignedMainTime = alignBeatTimeToTransient(t, mainMatch.beat.time, quantizedNudgeWindowSec);
-
-      finalBeats.push({
-        time: alignedMainTime,
-        energy: mainMatch.beat.energy,
-        isBass: mainMatch.beat.isBass
-      });
-
-      usedBeats.add(mainMatch.index);
-    }
-
-    // Check half-beats (8th notes)
-    const halfT = t + (beatInterval / 2);
-    const halfMatch = findStrongestNearbyBeat({
-      beats: sortedRawBeats,
-      usedBeatIndexes: usedBeats,
-      targetTime: halfT,
-      windowSec: halfWindow,
-    });
-
-    if (halfMatch !== undefined) {
-      const alignedHalfTime = alignBeatTimeToTransient(halfT, halfMatch.beat.time, quantizedNudgeWindowSec);
-
-      finalBeats.push({
-        time: alignedHalfTime,
-        energy: halfMatch.beat.energy,
-        isBass: halfMatch.beat.isBass
-      });
-
-      usedBeats.add(halfMatch.index);
-    }
-
-    // Check quarter-beats (16th notes) - only keep if very strong (build-ups/rolls)
-    const quarters = [t + beatInterval * 0.25, t + beatInterval * 0.75];
-    for (const quarterT of quarters) {
-      const quarterMatch = findStrongestNearbyBeat({
-        beats: sortedRawBeats,
-        usedBeatIndexes: usedBeats,
-        targetTime: quarterT,
-        windowSec: quarterWindow,
-        minEnergy: quarterEnergyThreshold,
-      });
-
-      if (quarterMatch !== undefined) {
-        const alignedQuarterTime = alignBeatTimeToTransient(quarterT, quarterMatch.beat.time, quantizedNudgeWindowSec);
-
-        finalBeats.push({
-          time: alignedQuarterTime,
-          energy: quarterMatch.beat.energy,
-          isBass: quarterMatch.beat.isBass
-        });
-
-        usedBeats.add(quarterMatch.index);
-      }
-    }
-  }
-
-  const minOffGridSpacing = beatInterval * (bpm >= 150 ? 0.24 : 0.28);
-  const offGridEnergyThreshold = avgEnergy > 0
-    ? Math.max(
-      avgEnergy * (bpm >= 150 ? 1.12 : 1.22),
-      avgEnergy + energyStdDev * (bpm >= 150 ? 0.2 : 0.35),
-    )
-    : 0;
-  const offGridSnapToleranceSec = Math.min(0.06, beatInterval * (bpm >= 150 ? 0.12 : 0.15));
-  const maxOffGridBeats = Math.max(2, Math.floor((duration / beatInterval) * (bpm >= 150 ? 0.22 : 0.16)));
-  let offGridBeatsAdded = 0;
-
-  // Preserve only musically close off-grid peaks (triplets/16ths) to avoid noisy desync notes.
-  for (let i = 0; i < sortedRawBeats.length; i++) {
-    if (offGridBeatsAdded >= maxOffGridBeats) break;
-    if (usedBeats.has(i)) continue;
-    const candidate = sortedRawBeats[i];
-    if (candidate.energy < offGridEnergyThreshold) continue;
-
-    const snapped = quantizeToMusicalSubdivision(candidate.time, offset, beatInterval);
-    if (snapped.errorSec > offGridSnapToleranceSec) continue;
-
-    const alignedTime = alignBeatTimeToTransient(snapped.time, candidate.time, offGridSnapToleranceSec);
-    const boundedTime = clamp(alignedTime, 0, duration);
-    const tooCloseToExisting = finalBeats.some((beat) => Math.abs(beat.time - boundedTime) < minOffGridSpacing);
-    if (tooCloseToExisting) continue;
-
-    finalBeats.push({
-      time: boundedTime,
-      energy: candidate.energy,
-      isBass: candidate.isBass,
-    });
-    offGridBeatsAdded++;
-  }
-
-  // Sort by time and dedupe very near hits.
-  finalBeats.sort((a, b) => a.time - b.time);
-  const dedupeThreshold = Math.max(0.03, beatInterval * 0.08);
-  const deduped: DetectedBeat[] = [];
-  for (const beat of finalBeats) {
-    const previous = deduped[deduped.length - 1];
-    if (!previous || beat.time - previous.time >= dedupeThreshold) {
-      deduped.push(beat);
-      continue;
-    }
-
-    if (beat.energy > previous.energy) {
-      previous.time = beat.time;
-      previous.energy = beat.energy;
-      previous.isBass = previous.isBass || beat.isBass;
-    } else if (beat.isBass) {
-      previous.isBass = true;
-    }
-  }
-
-  return deduped;
-}
-
-function findStrongestNearbyBeat(input: {
-  beats: DetectedBeat[];
-  usedBeatIndexes: Set<number>;
-  targetTime: number;
-  windowSec: number;
-  minEnergy?: number;
-}): { beat: DetectedBeat; index: number } | undefined {
-  const { beats, usedBeatIndexes, targetTime, windowSec, minEnergy = 0 } = input;
-  let strongestIndex = -1;
-  let strongestEnergy = -Infinity;
-  let smallestDistance = Infinity;
-
-  for (let i = 0; i < beats.length; i++) {
-    if (usedBeatIndexes.has(i)) continue;
-    const beat = beats[i]!;
-    if (beat.energy < minEnergy) continue;
-
-    const distance = Math.abs(beat.time - targetTime);
-    if (distance >= windowSec) continue;
-
-    if (
-      beat.energy > strongestEnergy ||
-      (beat.energy === strongestEnergy && distance < smallestDistance)
-    ) {
-      strongestIndex = i;
-      strongestEnergy = beat.energy;
-      smallestDistance = distance;
-    }
-  }
-
-  if (strongestIndex < 0) return undefined;
-  return {
-    beat: beats[strongestIndex]!,
-    index: strongestIndex,
+  const feat: Features = {
+    frames,
+    frameRate,
+    frameTime: (f: number) => (f * HOP + N_FFT / 2) / ANALYSIS_RATE,
+    bandFlux: [0, 1, 2, 3].map(() => new Float32Array(frames)),
+    fluxPitch: new Float32Array(frames),
+    slowFlux: new Float32Array(frames),
+    slowPitch: new Float32Array(frames),
+    energy: new Float32Array(frames),
+    low: new Float32Array(frames),
+    high: new Float32Array(frames),
+    mid: new Float32Array(frames),
+    flatness: new Float32Array(frames),
+    chroma: new Float32Array(frames * 12),
   };
-}
 
-function alignBeatTimeToTransient(gridTime: number, transientTime: number, maxNudgeSec: number): number {
-  const boundedNudge = clamp(transientTime - gridTime, -maxNudgeSec, maxNudgeSec);
-  return gridTime + boundedNudge * 0.75;
-}
-
-function quantizeToMusicalSubdivision(time: number, offset: number, beatInterval: number): { time: number; errorSec: number } {
-  const steps = [
-    beatInterval,
-    beatInterval / 2,
-    beatInterval / 3,
-    beatInterval / 4,
-    beatInterval / 6,
-  ];
-
-  let bestTime = time;
-  let bestError = Infinity;
-
-  for (const step of steps) {
-    if (step <= 0) continue;
-    const phase = (time - offset) / step;
-    const quantized = offset + Math.round(phase) * step;
-    const error = Math.abs(quantized - time);
-
-    if (error < bestError) {
-      bestError = error;
-      bestTime = quantized;
+  for (let f = 0; f < frames; f++) {
+    const start = f * HOP;
+    for (let i = 0; i < N_FFT; i++) {
+      re[i] = (signal[start + i] ?? 0) * window[i]!;
+      im[i] = 0;
     }
-  }
-
-  return {
-    time: bestTime,
-    errorSec: bestError,
-  };
-}
-
-// --- Simplified Standard Detection Methods ---
-
-async function detectBPM(samples: Float32Array, sampleRate: number): Promise<number> {
-  const analysisLength = Math.min(samples.length, sampleRate * 60);
-  const analysisData = samples.slice(0, analysisLength);
-
-  const hopSize = Math.floor(sampleRate / 100);
-  const frameSize = Math.floor(sampleRate / 20);
-  const envelope: number[] = [];
-
-  for (let i = 0; i < analysisData.length - frameSize; i += hopSize) {
+    fft(re, im);
+    const cur = ring[f % ringSize]!;
     let energy = 0;
-    for (let j = 0; j < frameSize; j++) {
-      energy += analysisData[i + j] * analysisData[i + j];
+    let low = 0;
+    let high = 0;
+    let mid = 0;
+    let logSum = 0;
+    for (let k = 0; k < bins; k++) {
+      const p = re[k]! * re[k]! + im[k]! * im[k]!;
+      const m = Math.sqrt(p);
+      cur[k] = Math.log1p(10 * m);
+      if (k === 0) continue;
+      energy += p;
+      if (k <= lowHi) low += p;
+      if (k >= highLo) high += p;
+      if (k >= midLo && k < midHi) {
+        mid += m;
+        logSum += Math.log(m + 1e-9);
+      }
+      const pc = pitchClass[k]!;
+      if (pc >= 0) feat.chroma[f * 12 + pc] += p;
     }
-    envelope.push(Math.sqrt(energy / frameSize));
+    feat.energy[f] = energy;
+    feat.low[f] = low;
+    feat.high[f] = high;
+    feat.mid[f] = mid;
+    const midCount = Math.max(1, midHi - midLo);
+    feat.flatness[f] = mid > 0 ? Math.exp(logSum / midCount) / (mid / midCount) : 1;
+
+    if (f >= FLUX_LAG) {
+      const ref = ring[(f - FLUX_LAG) % ringSize]!;
+      let weighted = 0;
+      let total = 0;
+      for (let b = 0; b < 4; b++) {
+        let sum = 0;
+        for (let k = Math.max(1, bandBins[b]!); k < bandBins[b + 1]!; k++) {
+          const refMax = Math.max(ref[k - 1]!, ref[k]!, ref[k + 1] ?? 0);
+          const rise = cur[k]! - refMax;
+          if (rise > 0) {
+            sum += rise;
+            weighted += rise * logHz[k]!;
+            total += rise;
+          }
+        }
+        feat.bandFlux[b]![f] = sum;
+      }
+      feat.fluxPitch[f] = total > 0 ? weighted / total : 0;
+    }
+    if (f >= slowLag) {
+      const ref = ring[(f - slowLag) % ringSize]!;
+      let sum = 0;
+      let weighted = 0;
+      for (let k = slowLo; k < slowHi; k++) {
+        const d = cur[k]! - ref[k]!;
+        if (d > 0) {
+          sum += d;
+          weighted += d * logHz[k]!;
+        }
+      }
+      feat.slowFlux[f] = sum;
+      feat.slowPitch[f] = sum > 0 ? weighted / sum : 0;
+    }
+  }
+  return feat;
+}
+
+function weightedFlux(bandFlux: Float32Array[], scale: number[], weights: number[]): Float32Array {
+  const n = bandFlux[0]!.length;
+  const out = new Float32Array(n);
+  for (let f = 0; f < n; f++) {
+    let v = 0;
+    for (let b = 0; b < 4; b++) v += bandFlux[b]![f]! * scale[b]! * weights[b]!;
+    out[f] = v;
+  }
+  return out;
+}
+
+// ---------- Tempo ----------
+
+function estimateTempo(novelty: Float32Array, frameRate: number): { bpm: number; confidence: number } {
+  const n = novelty.length;
+  const minLag = Math.floor((60 / MAX_BPM) * frameRate);
+  const maxLag = Math.ceil((60 / MIN_BPM) * frameRate) * 2 + 2;
+  let mean = 0;
+  for (const v of novelty) mean += v;
+  mean /= Math.max(1, n);
+  const centered = new Float32Array(n);
+  for (let i = 0; i < n; i++) centered[i] = novelty[i]! - mean;
+
+  const ac = new Float64Array(maxLag + 2);
+  for (let lag = 0; lag <= maxLag + 1; lag++) {
+    if (n - lag <= 0) break;
+    let s = 0;
+    for (let i = 0; i + lag < n; i++) s += centered[i]! * centered[i + lag]!;
+    ac[lag] = s / (n - lag);
+  }
+  const ac0 = ac[0]! || 1;
+  const acAt = (lag: number) => {
+    const i = Math.floor(lag);
+    const frac = lag - i;
+    return ((ac[i] ?? 0) * (1 - frac) + (ac[i + 1] ?? 0) * frac) / ac0;
+  };
+
+  // Score a period by its own peak plus its double (bar-level) and half (8ths)
+  // lags, weighted by a log-normal prior around a comfortable quarter-note tempo.
+  let best = { bpm: 120, score: -Infinity, lag: (60 / 120) * frameRate };
+  for (let bpm = MIN_BPM; bpm <= MAX_BPM; bpm += 0.25) {
+    const lag = (60 / bpm) * frameRate;
+    if (lag < minLag) continue;
+    const raw = acAt(lag) + 0.5 * acAt(lag * 2) + 0.25 * acAt(lag / 2);
+    const octaves = Math.log2(bpm / PRIOR_CENTER_BPM);
+    const prior = Math.exp(-0.5 * (octaves / PRIOR_WIDTH_OCTAVES) ** 2);
+    const score = raw * prior;
+    if (score > best.score) best = { bpm, score, lag };
   }
 
-  let bestCorrelation = -1;
-  let bestLag = 0;
-
-  const minLag = Math.max(1, Math.floor((60 / 220) * (sampleRate / hopSize)));
-  const maxLag = Math.floor((60 / 55) * (sampleRate / hopSize));
-
+  let floor = 0;
+  let count = 0;
   for (let lag = minLag; lag <= maxLag; lag++) {
-    let correlation = 0;
-    for (let i = 0; i < envelope.length - lag; i += 2) {
-      correlation += envelope[i] * envelope[i + lag];
-    }
-    if (correlation > bestCorrelation) {
-      bestCorrelation = correlation;
-      bestLag = lag;
-    }
+    floor += Math.max(0, acAt(lag));
+    count++;
+  }
+  floor /= Math.max(1, count);
+  const confidence = Math.max(0, acAt(best.lag) - floor);
+  return { bpm: best.bpm, confidence: Number.isFinite(confidence) ? confidence : 0 };
+}
+
+// ---------- Beat tracking (dynamic programming) ----------
+
+function trackBeats(novelty: Float32Array, period: number): number[] {
+  const n = novelty.length;
+  if (n === 0 || !Number.isFinite(period) || period <= 1) return [];
+  const local = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    local[i] = 0.25 * (novelty[i - 1] ?? 0) + 0.5 * novelty[i]! + 0.25 * (novelty[i + 1] ?? 0);
   }
 
-  if (bestLag <= 0) return 120;
+  const score = new Float64Array(n);
+  const backlink = new Int32Array(n).fill(-1);
+  const lo = Math.round(period / 2);
+  const hi = Math.round(period * 2);
+  for (let t = 0; t < n; t++) {
+    let bestPrev = -1;
+    let bestValue = -Infinity;
+    for (let tau = Math.max(0, t - hi); tau <= t - lo; tau++) {
+      const ratio = Math.log((t - tau) / period);
+      const value = score[tau]! - DP_TIGHTNESS * ratio * ratio;
+      if (value > bestValue) {
+        bestValue = value;
+        bestPrev = tau;
+      }
+    }
+    score[t] = local[t]! + (bestPrev >= 0 ? Math.max(0, bestValue) : 0);
+    backlink[t] = bestValue > 0 ? bestPrev : -1;
+  }
 
-  const detectedBPM = 60 * (sampleRate / hopSize) / bestLag;
+  let end = n - 1;
+  let endScore = -Infinity;
+  for (let t = Math.max(0, n - Math.round(period)); t < n; t++) {
+    if (score[t]! > endScore) {
+      endScore = score[t]!;
+      end = t;
+    }
+  }
+  const beats: number[] = [];
+  for (let t = end; t >= 0; t = backlink[t]!) {
+    beats.push(t);
+    if (backlink[t]! < 0) break;
+  }
+  return beats.reverse();
+}
 
-  if (detectedBPM < 65) return Math.round(detectedBPM * 2);
+/** Drops beats in leading/trailing stretches with no audible onsets. */
+function trimToActiveRegion(beats: number[], novelty: Float32Array, frameRate: number): number[] {
+  if (beats.length === 0) return beats;
+  const smooth = movingAverage(novelty, Math.round(frameRate * 1.0));
+  const threshold = percentile(smooth, 50) * 0.25;
+  let first = 0;
+  while (first < beats.length && smooth[beats[first]!]! < threshold) first++;
+  let last = beats.length - 1;
+  while (last > first && smooth[beats[last]!]! < threshold) last--;
+  return beats.slice(first, last + 1);
+}
 
-  return Math.round(detectedBPM);
+// ---------- Onset events ----------
+
+/** 0..1: how loud a frame is relative to the song's loud parts (0 = 36 dB or more below). */
+function loudnessAt(frameDb: Float32Array, f: number, loudRef: number): number {
+  return clamp01((frameDb[f]! - (loudRef - 36)) / 36);
+}
+
+function pickOnsets(feat: Features, odf: Float32Array, bandScale: number[], frameDb: Float32Array, loudRef: number): OnsetEvent[] {
+  const { frames: n, frameRate, frameTime, bandFlux, fluxPitch, mid, flatness } = feat;
+  const waitFrames = Math.round(frameRate * 0.045);
+  const localMean = movingAverage(odf, Math.round(frameRate * 0.15));
+  const delta = percentile(odf, 60) * 0.35;
+  const strongRef = Math.max(1e-6, percentile(odf, 98));
+
+  const onsets: OnsetEvent[] = [];
+  let lastPeak = -Infinity;
+  for (let f = 2; f < n - 2; f++) {
+    const v = odf[f]!;
+    if (v < localMean[f]! * 1.25 + delta) continue;
+    let isPeak = true;
+    for (let d = -3; d <= 3; d++) {
+      if (d !== 0 && (odf[f + d] ?? 0) > v) {
+        isPeak = false;
+        break;
+      }
+    }
+    if (!isPeak || f - lastPeak < waitFrames) continue;
+    lastPeak = f;
+
+    // Sub-frame timing by parabolic interpolation.
+    const a = odf[f - 1]!;
+    const c = odf[f + 1]!;
+    const denom = a - 2 * v + c;
+    const offset = denom !== 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / denom)) : 0;
+
+    const raw = [0, 1, 2, 3].map((b) => Math.max(0, bandFlux[b]![f]!) * bandScale[b]!);
+    const total = raw.reduce((s, x) => s + x, 0) || 1;
+    const bands = raw.map((x) => x / total) as [number, number, number, number];
+
+    const loudness = loudnessAt(frameDb, f, loudRef);
+    onsets.push({
+      time: frameTime(f + offset),
+      strength: clamp01(v / strongRef),
+      bands,
+      pitch: fluxPitch[f]!,
+      sustain: sustainAfter(mid, flatness, loudness, f, frameRate),
+      loudness,
+    });
+  }
+  return onsets;
 }
 
 /**
- * Merge beat arrays and remove duplicates within threshold
+ * How much of a sound is still ringing 0.15-0.5 s after it starts. Noise-like
+ * spectra (steady hiss, crackle) and near-silent passages score 0, so holds
+ * never land on them.
  */
-function mergeBeats(beats: DetectedBeat[], threshold: number): DetectedBeat[] {
-  if (beats.length === 0) return [];
-
-  const sorted = [...beats].sort((a, b) => a.time - b.time);
-  const merged: DetectedBeat[] = [sorted[0]];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const current = sorted[i];
-    const last = merged[merged.length - 1];
-
-    if (current.time - last.time >= threshold) {
-      merged.push(current);
-    } else {
-      // Overlapping beats: merge properties
-      // If either is bass, the merged one is bass
-      // Take the max energy
-      last.isBass = last.isBass || current.isBass;
-      last.energy = Math.max(last.energy, current.energy);
-    }
+function sustainAfter(mid: Float32Array, flatness: Float32Array, loudness: number, f: number, frameRate: number): number {
+  const n = mid.length;
+  const peak = Math.max(mid[f]!, mid[f + 1] ?? 0, mid[f + 2] ?? 0);
+  if (peak <= 0 || loudness < 0.15) return 0;
+  const from = f + Math.round(frameRate * 0.15);
+  const to = Math.min(n - 1, f + Math.round(frameRate * 0.5));
+  if (to <= from) return 0;
+  let tail = 0;
+  let flat = 0;
+  for (let g = from; g <= to; g++) {
+    tail += mid[g]!;
+    flat += flatness[g]!;
   }
-
-  return merged;
+  const frames = to - from + 1;
+  // Hiss measures ~0.85 here; dense mixes 0.4-0.7; tonal pads near 0.
+  if (flat / frames > 0.78) return 0;
+  return clamp01((tail / frames / peak - 0.35) / 0.55);
 }
 
 /**
- * Detect beats using low-frequency energy (for 808s/bass-heavy tracks like plugg)
+ * Soft onsets: sounds that swell in (pads, chord changes, bowed notes) barely
+ * register as a sharp flux peak. The slow flux finds them; they're only kept
+ * where no sharp onset is already nearby, and quiet ones stay weak.
  */
-function detectBassBeats(samples: Float32Array, sampleRate: number): DetectedBeat[] {
-  const filtered = new Float32Array(samples.length);
-  const cutoff = 150; 
-  const rc = 1 / (2 * Math.PI * cutoff);
-  const dt = 1 / sampleRate;
-  const alpha = dt / (rc + dt);
-
-  filtered[0] = samples[0];
-  for (let i = 1; i < samples.length; i++) {
-    filtered[i] = filtered[i - 1] + alpha * (samples[i] - filtered[i - 1]);
+function addSoftOnsets(onsets: OnsetEvent[], feat: Features, frameDb: Float32Array, loudRef: number) {
+  const { frames: n, frameRate, frameTime, slowFlux, slowPitch, mid, flatness } = feat;
+  const lag = Math.max(FLUX_LAG + 1, Math.round(frameRate * SLOW_LAG_SEC));
+  const smooth = movingAverage(slowFlux, Math.round(frameRate * 0.05));
+  const floor = movingAverage(smooth, Math.round(frameRate * 1.5));
+  const ref = Math.max(1e-6, percentile(smooth, 98));
+  const minSpacing = Math.round(frameRate * 0.4);
+  const existing = onsets.map((o) => o.time);
+  let last = -Infinity;
+  const added: OnsetEvent[] = [];
+  for (let f = 1; f < n - 1; f++) {
+    const v = smooth[f]!;
+    if (v < floor[f]! * 1.6 || v < ref * 0.12) continue;
+    if (v < smooth[f - 1]! || v < smooth[f + 1]!) continue;
+    if (f - last < minSpacing) continue;
+    // The swell started roughly half the comparison lag before its flux peak.
+    const startFrame = Math.max(0, Math.round(f - lag / 2));
+    const t = frameTime(startFrame);
+    if (existing.some((e) => Math.abs(e - t) < 0.15)) continue;
+    last = f;
+    const loudness = loudnessAt(frameDb, f, loudRef);
+    added.push({
+      time: t,
+      strength: clamp01((0.25 + 0.4 * (v / ref)) * loudness),
+      bands: [0.1, 0.4, 0.4, 0.1],
+      pitch: slowPitch[f]! || 9.5,
+      sustain: sustainAfter(mid, flatness, loudness, startFrame, frameRate),
+      loudness,
+    });
   }
-
-  const hopSize = Math.floor(sampleRate / 50); 
-  const frameSize = Math.floor(sampleRate / 10);
-  const energies: number[] = [];
-
-  for (let i = 0; i < filtered.length - frameSize; i += hopSize) {
-    let sum = 0;
-    for (let j = 0; j < frameSize; j++) {
-      sum += filtered[i + j] * filtered[i + j];
-    }
-    energies.push(Math.sqrt(sum / frameSize));
-  }
-
-  const beats: DetectedBeat[] = [];
-  const windowSize = 10;
-
-  for (let i = windowSize; i < energies.length - windowSize; i++) {
-    const current = energies[i];
-
-    let localSum = 0;
-    let localSqSum = 0;
-    for (let j = i - windowSize; j <= i + windowSize; j++) {
-      const val = energies[j];
-      localSum += val;
-      localSqSum += val * val;
-    }
-    const count = windowSize * 2 + 1;
-    const localAvg = localSum / count;
-    const localVariance = (localSqSum / count) - (localAvg * localAvg);
-    const localStdDev = Math.sqrt(Math.max(0, localVariance));
-
-    const coefficientOfVariation = localStdDev / (localAvg + 1e-6);
-    const sensitivity = clamp(1.15 + coefficientOfVariation * 1.6, 1.15, 2.0);
-    const minThreshold = Math.max(0.02, localAvg * 0.28);
-    const threshold = localAvg + (sensitivity * localStdDev);
-
-    if (current > threshold && 
-        current > minThreshold && 
-        current > energies[i - 1] && 
-        current > energies[i + 1]) {
-      
-      beats.push({
-        time: (i * hopSize) / sampleRate,
-        energy: current, // Raw energy value
-        isBass: true,
-      });
-      i += 6;
-    }
-  }
-
-  return beats;
+  onsets.push(...added);
+  onsets.sort((a, b) => a.time - b.time);
 }
 
-function detectBeatsEnergy(samples: Float32Array, sampleRate: number): DetectedBeat[] {
-  const hopSize = Math.floor(sampleRate / 100); 
-  const frameSize = 1024;
-  const energies: number[] = [];
+// ---------- Per-beat summaries, bars, feel, intensity ----------
 
-  for (let i = 0; i < samples.length - frameSize; i += hopSize) {
-    let sum = 0;
-    for (let j = 0; j < frameSize; j++) {
-      sum += samples[i + j] * samples[i + j];
-    }
-    energies.push(Math.sqrt(sum / frameSize));
-  }
-
-  const beats: DetectedBeat[] = [];
-  const windowSize = 28;
-
-  for (let i = windowSize; i < energies.length - windowSize; i++) {
-    const current = energies[i];
-
-    let localSum = 0;
-    let localSqSum = 0;
-    for (let j = i - windowSize; j <= i + windowSize; j++) {
-      const val = energies[j];
-      localSum += val;
-      localSqSum += val * val;
-    }
-    const count = windowSize * 2 + 1;
-    const localAvg = localSum / count;
-    const localVariance = (localSqSum / count) - (localAvg * localAvg);
-    const localStdDev = Math.sqrt(Math.max(0, localVariance));
-
-    // Adaptive threshold:
-    // compressed sections (low variance) should use a lower multiplier,
-    // while highly dynamic sections can keep a stricter threshold.
-    const coefficientOfVariation = localStdDev / (localAvg + 1e-6);
-    const sensitivity = clamp(1.2 + coefficientOfVariation * 1.4, 1.15, 2.2);
-    const minThreshold = Math.max(0.015, localAvg * 0.24);
-    const threshold = localAvg + (sensitivity * localStdDev);
-
-    if (current > threshold &&
-        current > minThreshold &&
-        current >= energies[i-1] &&
-        current > energies[i+1]) {
-      
-      beats.push({
-        time: (i * hopSize) / sampleRate,
-        energy: current,
-        isBass: false,
-      });
-
-      i += 9;
-    }
-  }
-
-  return beats;
+interface BeatSummary {
+  activity: number[]; // onset strength per second
+  loudnessDb: number[];
+  lowDb: number[];
+  brightnessDb: number[];
+  chroma: Float32Array[]; // 12 per beat
 }
 
-function clamp(value: number, min: number, max: number): number {
-  if (value < min) return min;
-  if (value > max) return max;
-  return value;
+function summarizeBeats(beatTimes: number[], duration: number, feat: Features, onsets: OnsetEvent[]): BeatSummary {
+  const { frameRate, frameTime, energy, low, high, chroma } = feat;
+  const offsetSec = frameTime(0);
+  const count = beatTimes.length;
+  const out: BeatSummary = { activity: [], loudnessDb: [], lowDb: [], brightnessDb: [], chroma: [] };
+  let o = 0;
+  for (let i = 0; i < count; i++) {
+    const start = beatTimes[i]!;
+    const end = i + 1 < count ? beatTimes[i + 1]! : Math.min(duration, start + 0.5);
+    const span = Math.max(0.05, end - start);
+    let act = 0;
+    while (o < onsets.length && onsets[o]!.time < start) o++;
+    for (let k = o; k < onsets.length && onsets[k]!.time < end; k++) act += onsets[k]!.strength;
+    const f0 = Math.max(0, Math.round((start - offsetSec) * frameRate));
+    const f1 = Math.min(energy.length, Math.max(f0 + 1, Math.round((end - offsetSec) * frameRate)));
+    let e = 0;
+    let l = 0;
+    let h = 0;
+    const c = new Float32Array(12);
+    for (let f = f0; f < f1; f++) {
+      e += energy[f]!;
+      l += low[f]!;
+      h += high[f]!;
+      for (let p = 0; p < 12; p++) c[p]! += chroma[f * 12 + p]!;
+    }
+    const frames = Math.max(1, f1 - f0);
+    out.activity.push(act / span);
+    out.loudnessDb.push(10 * Math.log10(1e-10 + e / frames));
+    out.lowDb.push(10 * Math.log10(1e-10 + l / frames));
+    out.brightnessDb.push(10 * Math.log10(1e-10 + h / Math.max(1e-10, e)));
+    out.chroma.push(c);
+  }
+  return out;
+}
+
+/**
+ * Bar starts: the beat in each group of four where low hits land and where the
+ * harmony changes (chords and sections tend to change on the one).
+ */
+function findDownbeatOffset(beatTimes: number[], onsets: OnsetEvent[], chroma: Float32Array[]): number {
+  if (beatTimes.length < 8) return 0;
+  const lowAt = (t: number) => {
+    let best = 0;
+    for (const o of onsets) {
+      if (o.time < t - 0.06) continue;
+      if (o.time > t + 0.06) break;
+      best = Math.max(best, o.strength * (0.4 + o.bands[0] + 0.5 * o.bands[1]));
+    }
+    return best;
+  };
+  const meanChroma = (from: number, to: number) => {
+    const m = new Float32Array(12);
+    for (let i = Math.max(0, from); i < Math.min(chroma.length, to); i++) {
+      for (let p = 0; p < 12; p++) m[p]! += chroma[i]![p]!;
+    }
+    return m;
+  };
+  const cosineDistance = (a: Float32Array, b: Float32Array) => {
+    let dot = 0;
+    let na = 0;
+    let nb = 0;
+    for (let p = 0; p < 12; p++) {
+      dot += a[p]! * b[p]!;
+      na += a[p]! * a[p]!;
+      nb += b[p]! * b[p]!;
+    }
+    return na > 0 && nb > 0 ? 1 - dot / Math.sqrt(na * nb) : 0;
+  };
+  const lowScore = [0, 0, 0, 0];
+  const harmonyScore = [0, 0, 0, 0];
+  beatTimes.forEach((t, i) => {
+    lowScore[i % 4]! += lowAt(t);
+    if (i >= 4 && i + 4 <= chroma.length) {
+      harmonyScore[i % 4]! += cosineDistance(meanChroma(i - 4, i), meanChroma(i, i + 4));
+    }
+  });
+  const norm = (xs: number[]) => {
+    const max = Math.max(...xs);
+    const min = Math.min(...xs);
+    return xs.map((x) => (max - min > 1e-9 ? (x - min) / (max - min) : 0));
+  };
+  const lowN = norm(lowScore);
+  const harmonyN = norm(harmonyScore);
+  let best = 0;
+  let bestScore = -Infinity;
+  for (let p = 0; p < 4; p++) {
+    const score = 0.5 * lowN[p]! + 0.5 * harmonyN[p]!;
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
+function detectSubdivision(beatTimes: number[], odf: Float32Array, frameRate: number, frameTime: (f: number) => number): 2 | 3 {
+  if (beatTimes.length < 8) return 2;
+  const offsetSec = frameTime(0);
+  const at = (t: number) => {
+    const f = Math.round((t - offsetSec) * frameRate);
+    let m = 0;
+    for (let d = -1; d <= 1; d++) m = Math.max(m, odf[f + d] ?? 0);
+    return m;
+  };
+  let straight = 0;
+  let triplet = 0;
+  for (let i = 0; i + 1 < beatTimes.length; i++) {
+    const a = beatTimes[i]!;
+    const span = beatTimes[i + 1]! - a;
+    straight += at(a + span / 2);
+    triplet += (at(a + span / 3) + at(a + (2 * span) / 3)) / 2;
+  }
+  return triplet > straight * 1.3 ? 3 : 2;
+}
+
+/**
+ * Per-beat intensity 0..1 from loudness, kick/bass weight, brightness and
+ * onset activity. A feature that barely varies across the song (a heavily
+ * compressed master, say) is held at 0.5 instead of having its noise stretched
+ * into fake dynamics, and songs with a small loudness range keep their
+ * intensity in the upper part of the scale.
+ */
+function computeIntensity(beats: BeatSummary): { intensity: number[]; lowWeight: number[] } {
+  const count = beats.activity.length;
+  if (count === 0) return { intensity: [], lowWeight: [] };
+  const norm = (xs: number[], minSpread: number) => {
+    const lo = percentile(xs, 5);
+    const hi = percentile(xs, 95);
+    if (hi - lo < minSpread) return xs.map(() => 0.5);
+    return xs.map((x) => clamp01((x - lo) / (hi - lo)));
+  };
+  const a = norm(beats.activity, Math.max(0.15, percentile(beats.activity, 5) * 0.3));
+  const l = norm(beats.loudnessDb, 2);
+  const w = norm(beats.lowDb, 2);
+  const b = norm(beats.brightnessDb, 2);
+  const raw = new Float32Array(count);
+  for (let i = 0; i < count; i++) raw[i] = 0.2 * a[i]! + 0.35 * l[i]! + 0.25 * w[i]! + 0.2 * b[i]!;
+  const smooth = Array.from(movingAverage(raw, 4));
+  let intensity = norm(smooth, 0.04);
+  const loudRange = percentile(beats.loudnessDb, 95) - percentile(beats.loudnessDb, 5);
+  if (loudRange < 6) intensity = intensity.map((v) => 0.4 + 0.6 * v);
+  return { intensity, lowWeight: Array.from(movingAverage(Float32Array.from(w), 2)) };
 }

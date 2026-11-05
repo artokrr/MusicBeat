@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import { sfx } from '../audio/sfx';
 import { SCORING, DIFFICULTY_PRESETS } from '../types/game';
 
 import type {
@@ -24,6 +25,8 @@ interface GameState {
   setDifficulty: (difficulty: DifficultyLevel) => void;
   musicVolume: number;
   setMusicVolume: (volume: number) => void;
+  sfxVolume: number;
+  setSfxVolume: (volume: number) => void;
   getGameplaySettings: () => GameplaySettings;
 
   // Game phase
@@ -78,6 +81,8 @@ const MIN_HEALTH = 0;
 const HANDLE_STORAGE_KEY = 'pong:handle';
 const LEGACY_HANDLE_STORAGE_KEY = 'musicbeat:handle';
 const VOLUME_STORAGE_KEY = 'musicbeat:volume';
+const SFX_VOLUME_STORAGE_KEY = 'pong:sfxVolume';
+const DEFAULT_SFX_VOLUME = 0.8;
 const DEFAULT_MUSIC_VOLUME = 0.3;
 
 function clampHealth(value: number) {
@@ -99,6 +104,11 @@ const parsedStoredVolume = storedVolume === null ? Number.NaN : Number.parseFloa
 const defaultMusicVolume = Number.isFinite(parsedStoredVolume)
   ? clampVolume(parsedStoredVolume)
   : DEFAULT_MUSIC_VOLUME;
+const storedSfxVolume = typeof window !== 'undefined'
+  ? Number.parseFloat(window.localStorage.getItem(SFX_VOLUME_STORAGE_KEY) ?? '')
+  : Number.NaN;
+const defaultSfxVolume = Number.isFinite(storedSfxVolume) ? clampVolume(storedSfxVolume) : DEFAULT_SFX_VOLUME;
+sfx.setVolume(defaultSfxVolume);
 
 export const useGameStore = create<GameState>((set, get) => ({
   screen: 'upload',
@@ -113,6 +123,15 @@ export const useGameStore = create<GameState>((set, get) => ({
       window.localStorage.setItem(VOLUME_STORAGE_KEY, normalizedVolume.toString());
     }
     set({ musicVolume: normalizedVolume });
+  },
+  sfxVolume: defaultSfxVolume,
+  setSfxVolume: (volume) => {
+    const normalized = clampVolume(volume);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(SFX_VOLUME_STORAGE_KEY, normalized.toString());
+    }
+    sfx.setVolume(normalized);
+    set({ sfxVolume: normalized });
   },
   getGameplaySettings: () => DIFFICULTY_PRESETS[get().difficulty],
 

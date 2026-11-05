@@ -1,25 +1,23 @@
 import { useEffect, useState } from 'react';
-import { useGameStore } from '../store/gameStore';
-import { analyzeBeatmap } from '../audio/BeatDetector';
+
+import { analyzeInBackground } from '../audio/analyzeInBackground';
 import { generateBeatmap } from '../beatmap/BeatmapGenerator';
+import { at, u } from '../game/pixel/layout';
+import PxText from '../game/pixel/PxText';
+import { useGameStore } from '../store/gameStore';
+import SceneBackdrop from './SceneBackdrop';
+
+const SEGMENTS = 20;
 
 export default function LoadingScreen() {
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState('PREPARING');
   const [warning, setWarning] = useState<string | null>(null);
-  const [dots, setDots] = useState('');
+  const [failed, setFailed] = useState(false);
 
   const audioBuffer = useGameStore((state) => state.audioBuffer);
+  const songTitle = useGameStore((state) => state.songTitle);
   const setBeatmap = useGameStore((state) => state.setBeatmap);
   const setScreen = useGameStore((state) => state.setScreen);
-
-  // Animated dots
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDots(d => d.length >= 3 ? '' : d + '.');
-    }, 400);
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     if (!audioBuffer) {
@@ -30,20 +28,15 @@ export default function LoadingScreen() {
     const analyze = async () => {
       try {
         setWarning(null);
-        setStatus('ANALYZING BEATS');
         setProgress(20);
 
-        const analysis = await analyzeBeatmap(audioBuffer);
+        const analysis = await analyzeInBackground(audioBuffer);
         if (analysis.usedFallback) {
-          setWarning('Low beat confidence — Simple Mode');
+          setWarning('simple mode');
         }
         setProgress(60);
 
-        setStatus('GENERATING MAP');
         const beatmap = generateBeatmap(analysis);
-        setProgress(90);
-
-        setStatus('READY');
         setProgress(100);
 
         setBeatmap(beatmap);
@@ -53,82 +46,54 @@ export default function LoadingScreen() {
         }, 500);
       } catch (error) {
         console.error('Analysis failed:', error);
-        setStatus('ERROR');
+        setFailed(true);
       }
     };
 
     analyze();
   }, [audioBuffer, setBeatmap, setScreen]);
 
-  // Create progress bar with blocks
-  const blocks = 20;
-  const filledBlocks = Math.floor((progress / 100) * blocks);
-  const progressBar = '[' + '='.repeat(filledBlocks) + ' '.repeat(blocks - filledBlocks) + ']';
+  const filled = Math.floor((progress / 100) * SEGMENTS);
 
   return (
-    <div style={styles.container}>
-      <div style={styles.content}>
-        <div style={styles.icon}>
-           Wait...
+    <SceneBackdrop dim={0.55}>
+      <div style={at(0, 92, styles.column)}>
+        <PxText text={songTitle || 'untitled'} style={{ color: 'var(--rose)' }} />
+        {failed && <PxText text="error" style={{ color: 'var(--miss)' }} />}
+        {warning && <PxText text={warning} style={{ color: 'var(--warm)' }} />}
+
+        <div style={styles.bar} role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+          {Array.from({ length: SEGMENTS }, (_, i) => (
+            <span key={i} style={{ ...styles.segment, background: i < filled ? 'var(--rose)' : 'var(--hud-line)' }} />
+          ))}
         </div>
+        <PxText text={`${progress.toString().padStart(3, '0')}%`} style={{ color: 'var(--text-dim)' }} />
 
-        <p style={styles.status}>{status}{dots}</p>
-        {warning && <p style={styles.warning}>{warning}</p>}
-
-        <p style={styles.progressBar}>{progressBar}</p>
-        <p style={styles.progressText}>{progress}%</p>
+        {failed && (
+          <button className="px-option" onClick={() => setScreen('upload')} style={{ marginTop: u(4) }}>
+            <PxText text="back" />
+          </button>
+        )}
       </div>
-    </div>
+    </SceneBackdrop>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: {
+  column: {
     width: '100%',
-    height: '100%',
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
-    background: '#f0f0f0',
-    fontFamily: '"Courier New", Courier, monospace',
+    gap: u(6),
   },
-  content: {
-    textAlign: 'center',
-    padding: '40px',
-    background: '#ffffff',
-    border: '4px solid #333',
-    boxShadow: '10px 10px 0px rgba(0,0,0,0.2)',
-    width: '400px',
+  bar: {
+    display: 'flex',
+    gap: u(1),
+    marginTop: u(2),
   },
-  icon: {
-    fontSize: '24px',
-    fontWeight: 'bold',
-    marginBottom: '20px',
-    color: '#4d80c9',
-  },
-  status: {
-    fontSize: '16px',
-    color: '#333',
-    marginBottom: '12px',
-    letterSpacing: '2px',
-    fontWeight: 'bold',
-  },
-  warning: {
-    fontSize: '12px',
-    color: '#8a8090',
-    margin: '0 0 16px 0',
-    letterSpacing: '1px',
-  },
-  progressBar: {
-    fontSize: '16px',
-    color: '#555',
-    margin: '0 0 8px 0',
-    letterSpacing: '2px',
-    fontWeight: 'bold',
-  },
-  progressText: {
-    fontSize: '14px',
-    color: '#888',
-    margin: 0,
+  segment: {
+    width: u(4),
+    height: u(5),
   },
 };

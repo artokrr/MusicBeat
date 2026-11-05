@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
 
+import { at, u } from '../game/pixel/layout';
+import PxText from '../game/pixel/PxText';
+import SceneBackdrop from './SceneBackdrop';
+
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
 
 interface ApiErrorPayload {
@@ -63,25 +67,18 @@ interface RunData {
 function gradeColor(grade: string) {
   switch (grade) {
     case 'S':
-      return '#ffeb3b';
+      return 'var(--perfect)';
     case 'A':
-      return '#4d80c9';
+      return 'var(--good)';
     case 'B':
-      return '#7dae5e';
+      return 'var(--rose)';
     case 'C':
-      return '#ffa726';
+      return 'var(--ok)';
     case 'D':
-      return '#ef5350';
+      return 'var(--rose-deep)';
     default:
-      return '#8d6e63';
+      return 'var(--text-faint)';
   }
-}
-
-function formatDuration(duration: number) {
-  if (!Number.isFinite(duration) || duration <= 0) return '0:00';
-  const minutes = Math.floor(duration / 60);
-  const seconds = Math.round(duration % 60);
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
 interface RunPageProps {
@@ -135,283 +132,135 @@ export default function RunPage({ runId }: RunPageProps) {
     }
   };
 
-  if (status === 'loading') {
+  if (status === 'loading' || status === 'error' || !run) {
     return (
-      <div style={styles.container}>
-        <div style={styles.content}>
-          <h1 style={styles.title}>Loading run...</h1>
+      <SceneBackdrop dim={0.6}>
+        <div style={at(0, 92, styles.center)}>
+          {status === 'loading' ? (
+            <PxText text="loading…" />
+          ) : (
+            <>
+              <PxText text="run not found" style={{ color: 'var(--miss)' }} />
+              <PxText text={(error ?? 'Try another link.').toLowerCase()} maxWidth={200} align="center" style={{ color: 'var(--text-dim)' }} />
+              <button className="px-option" onClick={handlePlay}>
+                <PxText text="play" />
+              </button>
+            </>
+          )}
         </div>
-      </div>
-    );
-  }
-
-  if (status === 'error' || !run) {
-    return (
-      <div style={styles.container}>
-        <div style={styles.content}>
-          <h1 style={styles.title}>Run not found</h1>
-          <p style={styles.subtitle}>{error ?? 'Try another link.'}</p>
-          <button onClick={handlePlay} style={styles.primaryButton}>
-            Play Pong
-          </button>
-        </div>
-      </div>
+      </SceneBackdrop>
     );
   }
 
   const accuracy = run.accuracy.toFixed(1);
-  const createdAt = new Date(run.createdAt).toLocaleString();
   const color = gradeColor(run.grade);
+  const rows: Array<[string, string, string]> = [
+    ['perfect', run.perfectCount.toString(), 'var(--perfect)'],
+    ['good', run.goodCount.toString(), 'var(--good)'],
+    ['ok', run.okCount.toString(), 'var(--ok)'],
+    ['miss', run.missCount.toString(), 'var(--miss)'],
+    ['combo', `×${run.maxCombo}`, 'var(--text)'],
+  ];
+  const title = run.title.length > 24 ? `${run.title.slice(0, 23)}…` : run.title;
 
   return (
-    <div style={styles.container}>
-      <div style={styles.content}>
-        <h1 style={styles.title}>RUN RESULTS</h1>
-        <p style={styles.subtitle}>Unlisted share page</p>
-
-        <div style={styles.headerRow}>
-          <div>
-            <div style={styles.handle}>@{run.handle}</div>
-            <div style={styles.songTitle}>{run.title}</div>
-          </div>
-          <div style={{ ...styles.grade, color }}>{run.grade}</div>
+    <SceneBackdrop dim={0.6}>
+      <div className="px-panel" style={at(LEFT, TOP, styles.card)}>
+        <div style={styles.header}>
+          <PxText text={`@${run.handle}`} style={{ color: 'var(--text-dim)' }} />
+          <PxText text={run.difficulty} style={{ color: 'var(--text-faint)' }} />
         </div>
+        <PxText text={title} style={{ color: 'var(--rose)' }} />
 
-        <div style={styles.scoreSection}>
-          <span style={styles.scoreLabel}>Final Score</span>
-          <span style={styles.scoreValue}>{run.score.toLocaleString()}</span>
-        </div>
-
-        <div style={styles.statsGrid}>
-          <div style={styles.statItem}>
-            <span style={styles.statValue}>{accuracy}%</span>
-            <span style={styles.statLabel}>Accuracy</span>
-          </div>
-          <div style={styles.statItem}>
-            <span style={styles.statValue}>{run.maxCombo}</span>
-            <span style={styles.statLabel}>Max Combo</span>
-          </div>
-          <div style={styles.statItem}>
-            <span style={styles.statValue}>{Math.round(run.bpm)}</span>
-            <span style={styles.statLabel}>BPM</span>
-          </div>
-          <div style={styles.statItem}>
-            <span style={styles.statValue}>{run.difficulty.toUpperCase()}</span>
-            <span style={styles.statLabel}>Difficulty</span>
+        <div style={styles.gradeRow}>
+          <PxText text={run.grade} scale={3} style={{ color }} />
+          <div style={styles.scoreBlock}>
+            <PxText text={run.score.toString().padStart(7, '0')} />
+            <PxText text={`${accuracy}%`} style={{ color: 'var(--text-dim)' }} />
           </div>
         </div>
 
-        <div style={styles.breakdown}>
-          <div style={styles.breakdownItem}>
-            <span style={{ ...styles.breakdownCount, color: '#ffeb3b' }}>{run.perfectCount}</span>
-            <span style={styles.breakdownLabel}>Perfect</span>
-          </div>
-          <div style={styles.breakdownItem}>
-            <span style={{ ...styles.breakdownCount, color: '#7dae5e' }}>{run.goodCount}</span>
-            <span style={styles.breakdownLabel}>Good</span>
-          </div>
-          <div style={styles.breakdownItem}>
-            <span style={{ ...styles.breakdownCount, color: '#4d80c9' }}>{run.okCount}</span>
-            <span style={styles.breakdownLabel}>OK</span>
-          </div>
-          <div style={styles.breakdownItem}>
-            <span style={{ ...styles.breakdownCount, color: '#ef5350' }}>{run.missCount}</span>
-            <span style={styles.breakdownLabel}>Miss</span>
-          </div>
+        <div style={styles.stats}>
+          {[rows.slice(0, 3), rows.slice(3)].map((column, i) => (
+            <div key={i} style={styles.statColumn}>
+              {column.map(([label, value, tint]) => (
+                <div key={label} style={styles.row}>
+                  <PxText text={label} style={{ color: 'var(--text-faint)' }} />
+                  <PxText text={value} style={{ color: tint }} />
+                </div>
+              ))}
+            </div>
+          ))}
         </div>
-
-        <div style={styles.metaRow}>
-          <span>Length {formatDuration(run.duration)}</span>
-          <span>Saved {createdAt}</span>
-        </div>
-
-        <div style={styles.buttons}>
-          <button onClick={handlePlay} style={styles.primaryButton}>
-            Play Your Own Song
-          </button>
-          <button onClick={handleCopyLink} style={styles.secondaryButton}>
-            Copy Run Link
-          </button>
-        </div>
-        {copyMessage && <p style={styles.copyMessage}>{copyMessage}</p>}
       </div>
-    </div>
+
+      <div style={at(SIDE_X, TOP, styles.side)}>
+        <button className="px-option" onClick={handlePlay} autoFocus>
+          <PxText text="play" />
+        </button>
+        <button className="px-option" onClick={handleCopyLink}>
+          <PxText text={copyMessage ? copyMessage.toLowerCase() : 'copy link'} />
+        </button>
+      </div>
+    </SceneBackdrop>
   );
 }
 
+// Same layout as the results screen: card on the left, choices on the right.
+const LEFT = 24;
+const TOP = 30;
+const CARD_W = 232;
+const SIDE_X = LEFT + CARD_W + 16;
+
 const styles: Record<string, React.CSSProperties> = {
-  container: {
+  center: {
     width: '100%',
-    height: '100%',
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
-    background: '#f0f0f0',
-    fontFamily: '"Courier New", Courier, monospace',
+    gap: u(8),
   },
-  content: {
-    textAlign: 'center',
-    padding: '40px',
-    maxWidth: '640px',
-    width: '100%',
-    background: '#ffffff',
-    border: '4px solid #333',
-    boxShadow: '10px 10px 0px rgba(0,0,0,0.2)',
+  card: {
+    width: u(CARD_W),
+    padding: `${u(7)} ${u(10)} ${u(8)}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: u(2),
   },
-  title: {
-    fontSize: '24px',
-    fontWeight: 700,
-    color: '#333',
-    marginBottom: '8px',
-    textTransform: 'uppercase',
-    letterSpacing: '4px',
-  },
-  subtitle: {
-    fontSize: '12px',
-    color: '#888',
-    marginBottom: '24px',
-    textTransform: 'uppercase',
-    letterSpacing: '2px',
-  },
-  headerRow: {
+  header: {
     display: 'flex',
     justifyContent: 'space-between',
+  },
+  gradeRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: u(12),
+    margin: `${u(4)} 0`,
+  },
+  scoreBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: u(2),
+  },
+  stats: {
+    display: 'flex',
+    gap: u(16),
+    paddingTop: u(5),
+    borderTop: `${u(1)} solid var(--hud-line)`,
+  },
+  statColumn: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  row: {
+    display: 'flex',
+    justifyContent: 'space-between',
+  },
+  side: {
+    display: 'flex',
+    flexDirection: 'column',
     alignItems: 'flex-start',
-    marginBottom: '24px',
-    textAlign: 'left',
-  },
-  handle: {
-    fontSize: '14px',
-    letterSpacing: '1px',
-    color: '#666',
-    textTransform: 'uppercase',
-  },
-  songTitle: {
-    fontSize: '20px',
-    fontWeight: 700,
-    color: '#4d80c9',
-  },
-  grade: {
-    fontSize: '64px',
-    fontWeight: 900,
-    lineHeight: 1,
-  },
-  scoreSection: {
-    marginBottom: '32px',
-  },
-  scoreLabel: {
-    display: 'block',
-    fontSize: '12px',
-    color: '#888',
-    marginBottom: '8px',
-    textTransform: 'uppercase',
-    letterSpacing: '2px',
-    fontWeight: 'bold',
-  },
-  scoreValue: {
-    fontSize: '40px',
-    fontWeight: 700,
-    color: '#333',
-    letterSpacing: '2px',
-  },
-  statsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    gap: '16px',
-    marginBottom: '32px',
-  },
-  statItem: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-  },
-  statValue: {
-    fontSize: '18px',
-    fontWeight: 700,
-    color: '#333',
-    letterSpacing: '1px',
-  },
-  statLabel: {
-    fontSize: '10px',
-    color: '#888',
-    textTransform: 'uppercase',
-    letterSpacing: '2px',
-    fontWeight: 'bold',
-  },
-  breakdown: {
-    display: 'flex',
-    justifyContent: 'center',
-    gap: '32px',
-    marginBottom: '24px',
-    padding: '20px',
-    border: '2px dashed #ddd',
-    background: '#f9f9f9',
-  },
-  breakdownItem: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '4px',
-    minWidth: '50px',
-  },
-  breakdownCount: {
-    fontSize: '20px',
-    fontWeight: 700,
-    letterSpacing: '1px',
-  },
-  breakdownLabel: {
-    fontSize: '10px',
-    color: '#888',
-    textTransform: 'uppercase',
-    letterSpacing: '1px',
-    fontWeight: 'bold',
-  },
-  metaRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    fontSize: '12px',
-    color: '#666',
-    marginBottom: '24px',
-    letterSpacing: '1px',
-  },
-  buttons: {
-    display: 'flex',
-    gap: '16px',
-    justifyContent: 'center',
-    flexWrap: 'wrap',
-  },
-  primaryButton: {
-    padding: '14px 28px',
-    fontSize: '14px',
-    background: '#4d80c9',
-    border: 'none',
-    color: '#fff',
-    cursor: 'pointer',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-    minWidth: '180px',
-    fontFamily: '"Courier New", Courier, monospace',
-    fontWeight: 'bold',
-    boxShadow: '0 4px 0 #365f9b',
-  },
-  secondaryButton: {
-    padding: '14px 28px',
-    fontSize: '14px',
-    background: '#fff',
-    border: '2px solid #ccc',
-    color: '#666',
-    cursor: 'pointer',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-    minWidth: '180px',
-    fontFamily: '"Courier New", Courier, monospace',
-    fontWeight: 'bold',
-    boxShadow: '0 4px 0 #bbb',
-  },
-  copyMessage: {
-    marginTop: '12px',
-    color: '#4d80c9',
-    fontSize: '12px',
-    letterSpacing: '1px',
+    marginLeft: u(-9),
   },
 };

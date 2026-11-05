@@ -1,0 +1,13 @@
+All sounds here are real recordings released under Creative Commons 0 (public domain),
+https://creativecommons.org/publicdomain/zero/1.0/ . Attribution isn't required; listed for the record.
+
+paddle-1..4.wav, smash-1..3.wav
+  "ping_pong_1.mp3" by mazbord: https://freesound.org/people/mazbord/sounds/622626/
+table-1..3.wav
+  "Ping Pong - Ball on Table" by el_boss: https://freesound.org/people/el_boss/sounds/628637/
+floor-1.wav
+  "fran_freesound_ping_pong_floor.wav" by Fran Freesound: https://freesound.org/people/Fran%20Freesound/sounds/634531/
+drop.mp3
+  "Dropping ping pong ball on table 2" by giddster: https://freesound.org/people/giddster/sounds/414461/
+
+Edits: high-passed (120-150 Hz), trimmed to start 1 ms before the attack, faded out, loudness-matched within each set.
