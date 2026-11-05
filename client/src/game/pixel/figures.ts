@@ -52,8 +52,8 @@ export function drawFigure(R: Renderer3D, pose: JointPose, look: Look, shadows: 
   if (look.coat) {
     // A long coat: one smooth cone from the chest to just below the knee, its hem swinging a little.
     const hem: Vec3 = [
-      j.pelvis[0] - f[0] * 0.02 + f[0] * pose.cloth.swingForward * 0.06,
-      j.pelvis[1] - f[1] * 0.02 + f[1] * pose.cloth.swingForward * 0.06,
+      j.pelvis[0] - f[0] * 0.02 + f[0] * pose.cloth.swingForward * 0.06 - f[1] * pose.cloth.swingSide * 0.06,
+      j.pelvis[1] - f[1] * 0.02 + f[1] * pose.cloth.swingForward * 0.06 + f[0] * pose.cloth.swingSide * 0.06,
       0.42,
     ];
     const top: Vec3 = [j.chest[0], j.chest[1], j.chest[2] + 0.02];
