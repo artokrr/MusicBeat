@@ -7,9 +7,10 @@
 
 import type { NoteType } from '../../types/beatmap';
 import type { HitFeedback, HitResult } from '../../types/game';
-import { clamp, lerp, type RGB, type Renderer3D, type Vec3 } from './engine3d';
+import { lerp, type RGB, type Renderer3D, type Vec3 } from './engine3d';
 import { createCourtyard, paintCourtyard, TABLE_HALF_L, TABLE_HALF_W, TABLE_Z } from './courtyard';
-import { blendPose, poseJoints, type Pose } from '../anim/pose';
+import { createAnimator } from '../anim/animator';
+import type { JointPose } from '../rig/joints';
 import { drawFigure, type Look, type ShadowSink } from './figures';
 import { drawText } from './font';
 import { drawHud, type HudState } from './hud';
@@ -79,8 +80,6 @@ const toX = (x: number) => (x - CENTER) * METRES_PER_UNIT_X;
 const toY = (y: number) => (NET_LINE - y) * METRES_PER_UNIT_Y;
 const PLAYER_HIT_Y = -1.5;
 const NPC_HIT_Y = 1.5;
-const PLAYER_FEET_Y = -2.3;
-const NPC_FEET_Y = 2.05;
 /** Where the ball bounces on the receiver's half, as a fraction of the flight. */
 const BOUNCE_AT = 0.7;
 const BALL_R = 0.055;
@@ -128,38 +127,12 @@ const PLAYER: Look = {
   hoodDown: true,
 };
 
-const READY: Pose = {
-  crouch: 0.35, lean: 0.22, stance: 0.22, twist: -0.05,
-  armR: { swing: 0.6, bend: 0.9, spread: 0.55 },
-  armL: { swing: 0.45, bend: 0.8, spread: 0.25 },
-};
-const BACKSWING: Pose = { ...READY, twist: -0.45, armR: { swing: 0.45, bend: 0.5, spread: 1.0 } };
-const STRIKE: Pose = { ...READY, crouch: 0.4, twist: 0.3, armR: { swing: 1.15, bend: 0.35, spread: 0.45 } };
-const FOLLOW: Pose = { ...READY, crouch: 0.32, twist: 0.6, armR: { swing: 1.55, bend: 0.75, spread: -0.05 } };
-
-/** The stroke after contact: strike, follow through, settle back to ready. */
-function strokePose(ageMs: number, rest: Pose): Pose {
-  const t = ageMs / 260;
-  if (t < 0.3) return blendPose(STRIKE, FOLLOW, t / 0.3);
-  if (t < 1) return blendPose(FOLLOW, rest, (t - 0.3) / 0.7);
-  return rest;
-}
-
-function breathe(pose: Pose, beat: number, depth: number): Pose {
-  const b = (Math.sin(beat * Math.PI) + 1) / 2;
-  return { ...pose, crouch: pose.crouch + b * depth };
-}
-
 // ---------- Scene state ----------
 
 let scene: Renderer3D | null = null;
 let frameCanvas: HTMLCanvasElement | null = null;
 let frameCtx: CanvasRenderingContext2D | null = null;
-let strangerX = 0.28;
-let lastServeMs = -Infinity;
-let wasServing = false;
-let lastReturnHitMs = -Infinity;
-let lastReturnNote = -1;
+const animator = createAnimator();
 
 function courtyard(): Renderer3D {
   if (!scene) {
@@ -181,15 +154,13 @@ function shadowSink(R: Renderer3D): ShadowSink {
   };
 }
 
-function drawStranger(R: Renderer3D, x: number, pose: Pose, flicker: boolean) {
+function drawStranger(R: Renderer3D, pose: JointPose, flicker: boolean) {
   const look = flicker ? { ...STRANGER, face: [70, 66, 76] as RGB } : STRANGER;
-  const jitter = flicker ? 0.05 : 0;
-  // Facing the camera, his right hand is on the screen's left: stand to the right of the ball.
-  drawFigure(R, poseJoints(x + jitter, NPC_FEET_Y, -Math.PI / 2, pose), look, shadowSink(R));
+  drawFigure(R, pose, look, shadowSink(R));
 }
 
-function drawPlayerFigure(R: Renderer3D, x: number, pose: Pose) {
-  drawFigure(R, poseJoints(x, PLAYER_FEET_Y, Math.PI / 2 + 0.05, pose), PLAYER, shadowSink(R));
+function drawPlayerFigure(R: Renderer3D, pose: JointPose) {
+  drawFigure(R, pose, PLAYER, shadowSink(R));
 }
 
 /** A ball, its contact shadow on whatever is under it, and an optional faded trail. */
@@ -256,44 +227,6 @@ function noteToBall(note: NoteView, frame: FrameState): BallView | null {
     return { pos: [toX(x), lerp(NPC_HIT_Y, PLAYER_HIT_Y, p), TABLE_Z + BALL_R + flightHeight(p)], color, alpha: 1 };
   }
   return null;
-}
-
-/** Player pose: ready, a backswing as a ball closes in on their lane, the stroke after a press. */
-function playerPose(frame: FrameState): Pose {
-  const rest = breathe(READY, frame.beat, 0.03);
-  if (frame.pressAgeMs < 260) return strokePose(frame.pressAgeMs, rest);
-  let closest = 0;
-  for (const note of frame.notes) {
-    if (note.hit || note.returnPhase) continue;
-    const p = 1 - (note.time - frame.songTime) / frame.approachTime;
-    if (p < 1.05) closest = Math.max(closest, p);
-  }
-  const wind = clamp((closest - 0.75) / 0.2, 0, 1);
-  return wind > 0 ? blendPose(rest, BACKSWING, wind * wind) : rest;
-}
-
-/** The stranger: serves each ball, hits back each return, otherwise waits. */
-function strangerPose(frame: FrameState, nowMs: number): Pose {
-  if (frame.serving && !wasServing) lastServeMs = nowMs;
-  wasServing = frame.serving;
-  const rest = breathe(READY, frame.beat * 0.5, 0.02);
-  const returning = frame.notes.find((n) => n.returnPhase && n.returnProgress > 0.85);
-  if (returning && returning.time !== lastReturnNote) {
-    lastReturnNote = returning.time;
-    lastReturnHitMs = nowMs;
-  }
-  const age = Math.min(nowMs - lastServeMs, nowMs - lastReturnHitMs);
-  return strokePose(age, rest);
-}
-
-function strangerTarget(frame: FrameState): number {
-  // Step towards the newest ball's starting point (the one being served).
-  let newest: NoteView | null = null;
-  for (const note of frame.notes) {
-    if (note.hit || note.returnPhase) continue;
-    if (!newest || note.time > newest.time) newest = note;
-  }
-  return toX(newest ? newest.startX : CENTER) + 0.28;
 }
 
 // ---------- 2D overlays ----------
@@ -448,13 +381,12 @@ export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
   const missRecently = frame.feedbacks.some((fb) => fb.result === 'miss' && nowWall - fb.timestamp < 320);
   const randomFlicker = Math.floor(frame.nowMs / 110) % 61 === 0;
 
-  strangerX += (strangerTarget(frame) - strangerX) * Math.min(1, frame.dt * 6);
-  drawStranger(R, strangerX, strangerPose(frame, frame.nowMs), missRecently || randomFlicker || frame.fade > 0.2);
+  const poses = animator.update(frame);
+  drawStranger(R, poses.stranger, missRecently || randomFlicker || frame.fade > 0.2);
   drawLaneMarks(R, frame);
   const balls = frame.notes.map((note) => noteToBall(note, frame)).filter((b): b is BallView => b !== null);
   for (const ball of balls) drawBall(R, ball.pos, ball.color, ball.alpha);
-  // The player's right hand sits on the lane, so the body stands a little to the left of it.
-  drawPlayerFigure(R, toX(frame.playerX) - 0.3, playerPose(frame));
+  drawPlayerFigure(R, poses.player);
   R.applyShadows();
   R.edges();
 
@@ -482,9 +414,9 @@ export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
 export function renderIdleScene(ctx: CanvasRenderingContext2D, nowMs: number, dt: number, options: { withPlayer?: boolean; flicker?: boolean } = {}) {
   const R = courtyard();
   R.restore();
-  const beat = nowMs / 1800;
-  drawStranger(R, 0.28, breathe(READY, beat, 0.02), options.flicker === true || Math.floor(nowMs / 110) % 61 === 0);
-  if (options.withPlayer) drawPlayerFigure(R, -0.3, breathe(READY, beat, 0.03));
+  const poses = animator.idle(nowMs, dt);
+  drawStranger(R, poses.stranger, options.flicker === true || Math.floor(nowMs / 110) % 61 === 0);
+  if (options.withPlayer) drawPlayerFigure(R, poses.player);
   R.applyShadows();
   R.edges();
   present(ctx, R, 0, 0);
