@@ -12,6 +12,7 @@
 //     [--scale 3]            nearest-neighbour upscale of the 384x216 canvas
 //     [--frames 1 --every 250]  capture several frames: out-0.png, out-1.png...
 //     [--port 9333]          DevTools port (use different ports in parallel)
+//     [--chrome-args "--disable-webgl"]  extra Chrome flags, space-separated
 //
 // The page's audio is not muted: run with the game volume down if needed.
 
@@ -20,7 +21,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { basename, dirname, join, resolve } from 'node:path';
 
 const args = Object.fromEntries(
-  process.argv.slice(2).reduce((acc, a, i, all) => (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1]?.startsWith('--') ? 'true' : all[i + 1]]] : acc), []),
+  process.argv.slice(2).reduce((acc, a, i, all) => (a.startsWith('--') && all[i - 1] !== '--chrome-args' ? [...acc, [a.slice(2), all[i + 1]?.startsWith('--') && a !== '--chrome-args' ? 'true' : all[i + 1]]] : acc), []),
 );
 const url = args.url ?? 'http://localhost:3000/';
 const out = args.out ?? 'shot.png';
@@ -37,7 +38,7 @@ let connection;
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
   '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
   '--window-size=1152,648', '--autoplay-policy=no-user-gesture-required', '--mute-audio',
-  '--no-first-run', '--no-default-browser-check', '--enable-unsafe-swiftshader', 'about:blank',
+  '--no-first-run', '--no-default-browser-check', '--enable-unsafe-swiftshader', ...(args['chrome-args'] ? args['chrome-args'].split(' ') : []), 'about:blank',
 ], { stdio: 'ignore' });
 
 try {
