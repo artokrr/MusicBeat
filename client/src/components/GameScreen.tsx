@@ -28,6 +28,8 @@ export default function GameScreen() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [countdown, setCountdown] = useState(3);
+  const countdownRef = useRef(countdown);
+  countdownRef.current = countdown;
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [failStartMs, setFailStartMs] = useState<number | null>(null);
 
@@ -212,15 +214,18 @@ export default function GameScreen() {
   useEffect(() => {
     if (phase !== 'countdown') return;
 
+    // Count down outside the state updater: updaters run during render, and
+    // starting the game from one would update the store mid-render.
+    let remaining = countdownRef.current;
     const countdownInterval = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(countdownInterval);
-          startGame();
-          return 0;
-        }
-        return prev - 1;
-      });
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(countdownInterval);
+        setCountdown(0);
+        startGame();
+        return;
+      }
+      setCountdown(remaining);
     }, 1000);
 
     return () => clearInterval(countdownInterval);
