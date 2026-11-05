@@ -11,6 +11,7 @@ const SEGMENTS = 20;
 
 export default function LoadingScreen() {
   const [progress, setProgress] = useState(0);
+  const [displayProgress, setDisplayProgress] = useState(0);
   const [warning, setWarning] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -53,21 +54,29 @@ export default function LoadingScreen() {
     analyze();
   }, [audioBuffer, setBeatmap, setScreen]);
 
-  const filled = Math.floor((progress / 100) * SEGMENTS);
+  // Only interpolate the presentation; analysis and screen timing stay untouched.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setDisplayProgress((value) => Math.min(progress, value + 5));
+    }, 60);
+    return () => window.clearInterval(timer);
+  }, [progress]);
+
+  const filled = Math.floor((displayProgress / 100) * SEGMENTS);
 
   return (
     <SceneBackdrop dim={0.55}>
       <div style={at(0, 92, styles.column)}>
-        <PxText text={songTitle || 'untitled'} style={{ color: 'var(--rose)' }} />
+        <PxText className="px-loading-title" text={songTitle || 'untitled'} style={{ color: 'var(--rose)' }} />
         {failed && <PxText text="error" style={{ color: 'var(--miss)' }} />}
         {warning && <PxText text={warning} style={{ color: 'var(--warm)' }} />}
 
-        <div style={styles.bar} role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+        <div style={styles.bar} role="progressbar" aria-valuenow={displayProgress} aria-valuemin={0} aria-valuemax={100}>
           {Array.from({ length: SEGMENTS }, (_, i) => (
-            <span key={i} style={{ ...styles.segment, background: i < filled ? 'var(--rose)' : 'var(--hud-line)' }} />
+            <span key={i} className={!failed && i === filled - 1 ? 'px-loading-tip' : undefined} style={{ ...styles.segment, background: i < filled ? 'var(--rose)' : 'var(--hud-line)' }} />
           ))}
         </div>
-        <PxText text={`${progress.toString().padStart(3, '0')}%`} style={{ color: 'var(--text-dim)' }} />
+        <PxText text={`${displayProgress.toString().padStart(3, '0')}%`} style={{ color: 'var(--text-dim)' }} />
 
         {failed && (
           <button className="px-option" onClick={() => setScreen('upload')} style={{ marginTop: u(4) }}>

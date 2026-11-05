@@ -79,6 +79,7 @@ export default function UploadScreen() {
 
         <div className="px-panel px-panel-light" style={at((LOW_W - PANEL_W) / 2, 92, styles.panel)}>
           <button
+            className="px-drop"
             style={{ ...styles.drop, ...(dragOver ? styles.dropActive : {}) }}
             onClick={() => fileInputRef.current?.click()}
           >
