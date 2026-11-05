@@ -12,6 +12,7 @@
 //     [--scale 3]            nearest-neighbour upscale of the 384x216 canvas
 //     [--frames 1 --every 250]  capture several frames: out-0.png, out-1.png...
 //     [--port 9333]          DevTools port (use different ports in parallel)
+//     [--page true]          screenshot the whole page (HTML included) instead of the canvas
 //     [--chrome-args "--disable-webgl"]  extra Chrome flags, space-separated
 //
 // The page's audio is not muted: run with the game volume down if needed.
@@ -97,7 +98,13 @@ try {
     await sleep(Number(args.play ?? 6000));
   }
 
-  for (let k = 0; k < frames; k++) {
+  if (args.page === 'true') {
+    // The whole page as the browser shows it, HTML layer included.
+    const { data } = await send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(out, Buffer.from(data, 'base64'));
+    console.log('wrote', out);
+  }
+  for (let k = 0; k < (args.page === 'true' ? 0 : frames); k++) {
     const dataUrl = await evaluate(`(() => {
       const src = document.querySelector('canvas');
       const c = document.createElement('canvas');
