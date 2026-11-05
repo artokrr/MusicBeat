@@ -9,7 +9,8 @@ import type { Vec3 } from '../rig/joints';
 const PLACEMENTS: ReadonlyArray<readonly [string, Vec3]> = [
   ['table', [0, 0, 0]], ['bench', [-3, .6, 0]], ['lamppost', [2.25, .35, 0]],
   ['tree_bare_a', [-3.4, 3.6, 0]], ['tree_bare_b', [3.9, 3.9, 0]],
-  ['building_facade', [0, 4.6, 0]],
+  // Entrance (door + canopy) off-screen right: from this camera its roof reads as a slab.
+  ['building_facade', [7.5, 4.6, 0]],
 ];
 // Sort a seeded random rank once, excluding the entrance's missing pane.
 const LIT_WINDOWS = new Set(Array.from({ length: 75 }, (_, i) => i).filter(i => i !== 7)
