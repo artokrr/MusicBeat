@@ -151,7 +151,7 @@ class Body {
         foot.step(foot === this.left ? l : r);
       }
     }
-    const pelvisZ = (npc ? 0.84 : 0.79) + breath - this.load.value - this.slump.value * 0.025;
+    const pelvisZ = (npc ? 0.87 : 0.79) + breath - this.load.value - this.slump.value * 0.025;
     const pelvisY = this.feetY + f * (0.065 + this.load.value);
     set(j.pelvis, this.x.value, pelvisY, pelvisZ);
     const hipTurn = -this.twist.value * 0.25;
