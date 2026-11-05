@@ -3,6 +3,9 @@
 // table, z up. The table is centred on the origin.
 
 import { Renderer3D, bayer, clamp, hash, lerp, noise, type RGB, type Vec3 } from './engine3d';
+import { CAMERA, LIGHT } from '../scene/camera';
+
+export type CourtyardPainter = Pick<Renderer3D, 'box' | 'capsule' | 'castShadow'>;
 
 export const TABLE_HALF_W = 0.7625;
 export const TABLE_HALF_L = 1.37;
@@ -22,31 +25,26 @@ const SKY: RGB = [12, 13, 22];
 const BUILDING_Y = 4.6;
 
 export function createCourtyard(): Renderer3D {
-  return new Renderer3D(
-    { scale: 44, yaw: 0.2, pitch: 0.75, target: [0.1, 0.1, 0.6], offsetY: 6 },
-    {
-      moon: [-0.45, 0.55, 0.7],
-      moonStrength: 0.42,
-      ambient: 0.34,
-      cool: [18, 20, 40],
-      warm: [255, 190, 116],
-      lamps: [{ pos: LAMP_POS, strength: 3.2, radius: 2.2 }],
-    },
-  );
+  return new Renderer3D(CAMERA, LIGHT);
 }
 
 /** Paints the static scene into the renderer and keeps it as the backdrop. */
 export function paintCourtyard(R: Renderer3D) {
   paintGround(R);
+  paintCourtyardGeometry(R);
+  R.applyShadows();
+  fog(R);
+  R.bake();
+}
+
+/** Shared geometry recipe; GPU batches it once instead of sampling box faces. */
+export function paintCourtyardGeometry(R: CourtyardPainter) {
   paintBuilding(R);
   paintTable(R);
   paintLampPost(R);
   paintBench(R);
   paintTree(R, [-3.4, 3.6, 0], 1.9, 0.13, 11);
   paintTree(R, [3.9, 3.9, 0], 1.7, 0.11, 23);
-  R.applyShadows();
-  fog(R);
-  R.bake();
 }
 
 function paintGround(R: Renderer3D) {
@@ -64,8 +62,9 @@ function paintGround(R: Renderer3D) {
   }, SKY);
 }
 
-function paintBuilding(R: Renderer3D) {
+function paintBuilding(R: CourtyardPainter) {
   R.box(-12, BUILDING_Y, 0, 12, BUILDING_Y + 0.6, 9, WALL, {
+    surface: 'wall',
     grain: 2,
     paint: (wp, n) => {
       if (n[1] !== -1) return WALL;
@@ -84,7 +83,7 @@ function paintBuilding(R: Renderer3D) {
   });
 }
 
-function paintTable(R: Renderer3D) {
+function paintTable(R: CourtyardPainter) {
   const legs: Array<[number, number]> = [[-0.6, -1.0], [0.6, -1.0], [-0.6, 1.0], [0.6, 1.0]];
   for (const [lx, ly] of legs) {
     R.box(lx - 0.025, ly - 0.025, 0, lx + 0.025, ly + 0.025, TABLE_Z - 0.04, METAL);
@@ -92,6 +91,7 @@ function paintTable(R: Renderer3D) {
   }
   R.box(-0.04, -0.4, 0, 0.04, 0.4, 0.06, METAL);
   R.box(-TABLE_HALF_W, -TABLE_HALF_L, TABLE_Z - 0.04, TABLE_HALF_W, TABLE_HALF_L, TABLE_Z, TABLE_GREEN, {
+    surface: 'table',
     receiver: true,
     grain: 6,
     dither: 0.4,
@@ -104,6 +104,7 @@ function paintTable(R: Renderer3D) {
   });
   // The net: a white tape over a dark mesh.
   R.box(-TABLE_HALF_W - 0.05, -0.01, TABLE_Z, TABLE_HALF_W + 0.05, 0.01, TABLE_Z + 0.15, [150, 154, 168], {
+    surface: 'net',
     paint: (wp) => {
       if (wp[2] > TABLE_Z + 0.13) return [220, 222, 230];
       if (Math.abs(Math.abs(wp[0]) - TABLE_HALF_W - 0.03) < 0.02) return METAL;
@@ -115,7 +116,7 @@ function paintTable(R: Renderer3D) {
   }
 }
 
-function paintLampPost(R: Renderer3D) {
+function paintLampPost(R: CourtyardPainter) {
   const [x, y] = [LAMP_POS[0] + 0.3, LAMP_POS[1]];
   R.capsule([x, y, 0], [x, y, 3.3], 0.05, 0.04, METAL);
   R.capsule([x, y, 3.3], [x - 0.3, y, 3.36], 0.035, 0.03, METAL);
@@ -123,7 +124,7 @@ function paintLampPost(R: Renderer3D) {
   for (let z = 0.1; z < 3.3; z += 0.03) R.castShadow([x, y, z], 0.06, 2);
 }
 
-function paintBench(R: Renderer3D) {
+function paintBench(R: CourtyardPainter) {
   const bx = -3.0;
   const by = 0.6;
   R.box(bx - 0.25, by - 0.9, 0.42, bx + 0.25, by + 0.9, 0.48, WOOD, { grain: 8 });
@@ -133,7 +134,7 @@ function paintBench(R: Renderer3D) {
   for (let y = -0.8; y <= 0.8; y += 0.2) R.castShadow([bx, by + y, 0.45], 0.22, 2);
 }
 
-function paintTree(R: Renderer3D, root: Vec3, length: number, radius: number, seed: number) {
+function paintTree(R: CourtyardPainter, root: Vec3, length: number, radius: number, seed: number) {
   const branch = (a: Vec3, dir: Vec3, len: number, rad: number, depth: number, s: number) => {
     const b: Vec3 = [a[0] + dir[0] * len, a[1] + dir[1] * len, a[2] + dir[2] * len];
     R.capsule(a, b, rad, rad * 0.7, BARK, 'rough');

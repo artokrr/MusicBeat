@@ -74,6 +74,8 @@ export interface BoxPaint {
 }
 
 export interface BoxOptions {
+  /** Semantic surface for the GPU implementation of the same scene recipe. */
+  surface?: 'wall' | 'table' | 'net';
   paint?: BoxPaint;
   grain?: number;
   dither?: number;
