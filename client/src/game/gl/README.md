@@ -64,6 +64,12 @@ aims bone local Y at each joint pair, retains rest roll, derives twist from
 forward/chestForward and resolves matrices through the actual parent. No glTF
 animation clips, authored texture maps or morph-target cloth are consumed.
 
+Authored right hands use the GLB's grip metadata to seat the mitten around the
+unchanged paddle transform. The forearm meets that corrected wrist; the shared
+animator's joint output and procedural/CPU rigs are unchanged. Imported material
+sidedness is retained, including the recessed hood closure. The `face_void`
+vertices follow the existing `Look.face` flicker and return to their idle colour.
+
 ## Atmosphere
 
 - `lamp.ts`: deterministic brief dips, two 60Hz visual ticks, with events 24–40 s
@@ -119,6 +125,13 @@ node tools/shot.mjs --url http://localhost:3140/ --out tools/out/final-full-song
   --frames 3 --every 60000 --eval tools/gl-bot.js --verify true
 node tools/fx-profile.mjs
 ```
+
+For deterministic visual regressions, run `tools/shot.mjs --after
+tools/visual-qa.js` on a running server. The `*-checks.json` must have an empty
+`failures` array. It saves native-resolution normal/flicker/restored frames and
+inspection-camera grip details, tests static pixels over 60 presentation ticks,
+and checks both authored grips and sleeve junctions through 49 poses. The
+inspection camera is confined to the check; gameplay keeps its original view.
 
 `fx-checks.js` waits for authored assets, tests 48 paddle orientations, physically
 occludes a test flake behind a head, measures flicker cadence, verifies footprint

@@ -1,10 +1,10 @@
-import { CapsuleGeometry, Color, DynamicDrawUsage, Float32BufferAttribute, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, MeshDepthMaterial, Quaternion, RGBADepthPacking, SphereGeometry, Vector3, } from 'three';
+import { CapsuleGeometry, Color, DoubleSide, DynamicDrawUsage, Float32BufferAttribute, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, MeshDepthMaterial, Quaternion, RGBADepthPacking, SphereGeometry, Vector3, } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BONES } from '../rig/joints';
 import { prepareMeshGeometry } from './geometry';
 import { capsuleDepthMaterial, pixelMaterial } from './material';
 import { boneColor, createProceduralRig, disposeRig, GLTF_TO_WORLD, PoseRetargeter } from './retarget';
-import type { BufferGeometry, Scene, ShaderMaterial } from 'three';
+import type { BufferAttribute, BufferGeometry, Scene, ShaderMaterial } from 'three';
 import type { Look } from '../pixel/figures';
 import type { PaddleBatch } from './paddles';
 import type { JointPose, Vec3 } from '../rig/joints';
@@ -104,6 +104,8 @@ export class Figure {
   private readonly abort = new AbortController();
   private disposed = false;
   private requested = false;
+  private readonly faceColors: { attribute: BufferAttribute; vertices: number[] }[] = [];
+  private readonly face: Vec3 = [-1, -1, -1];
   constructor(scene: Scene, private readonly name: 'player' | 'stranger', private readonly procedural: boolean) { scene.add(this.root); }
   private install(root: Group, rig: PoseRetargeter) {
     root.traverse(o => {
@@ -113,12 +115,14 @@ export class Figure {
       // Preserve per-face material colours on multi-material glTF meshes.
       const geometry = o.geometry.clone();
       const colors = new Float32Array(geometry.getAttribute('position').count * 3);
+      const faceVertices = new Set<number>();
       const index = geometry.getIndex();
       for (const group of geometry.groups.length ? geometry.groups : [{ start: 0, count: index?.count ?? colors.length / 3, materialIndex: 0 }]) {
         const source = old[group.materialIndex ?? 0];
         const color = 'color' in source ? (source.color as Color).clone().convertLinearToSRGB() : new Color(.2, .2, .25);
         for (let k = group.start; k < group.start + group.count; k++) {
           const v = index ? index.getX(k) : k;
+          if (source.name === 'face_void') faceVertices.add(v);
           colors[v * 3] = color.r;
           colors[v * 3 + 1] = color.g;
           colors[v * 3 + 2] = color.b;
@@ -126,6 +130,11 @@ export class Figure {
       }
       if (!geometry.hasAttribute('baseColor'))
         geometry.setAttribute('baseColor', new Float32BufferAttribute(colors, 3));
+      if (faceVertices.size) {
+        const attribute = geometry.getAttribute('baseColor') as BufferAttribute;
+        attribute.setUsage(DynamicDrawUsage);
+        this.faceColors.push({ attribute, vertices: [...faceVertices] });
+      }
       prepareMeshGeometry(geometry, new Color(1, 1, 1));
       o.geometry.dispose();
       o.geometry = geometry;
@@ -133,6 +142,9 @@ export class Figure {
         m.dispose();
       geometry.clearGroups();
       o.material = pixelMaterial();
+      // The recessed hood closure is authored double-sided. Dropping this
+      // flag exposes the courtyard through its inward-facing triangles.
+      o.material.side = old.some(m => m.side === DoubleSide) ? DoubleSide : old[0].side;
       o.castShadow = o.receiveShadow = true;
       o.frustumCulled = false;
     });
@@ -184,6 +196,16 @@ export class Figure {
     if (!visible)
       return;
     this.rig?.update(pose);
+    // Authored colours are baked at load time. Keep the void's semantic
+    // material so the existing miss/fade flicker also reaches the GLB skin.
+    const face = look.face ?? BLACK;
+    if (this.faceColors.length && (face[0] !== this.face[0] || face[1] !== this.face[1] || face[2] !== this.face[2])) {
+      for (const { attribute, vertices } of this.faceColors) {
+        for (const v of vertices) attribute.setXYZ(v, face[0] / 255, face[1] / 255, face[2] / 255);
+        attribute.needsUpdate = true;
+      }
+      this.face[0] = face[0]; this.face[1] = face[1]; this.face[2] = face[2];
+    }
     const j = pose.joints, f = pose.forward;
     if (!this.rig)
       for (const bone of BONES) {
