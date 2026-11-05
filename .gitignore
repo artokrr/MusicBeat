@@ -30,5 +30,6 @@ server/uploads/
 .cache/
 *.tsbuildinfo
 
-# Local renderer verification artifacts
+# Local verification artifacts (renders, screenshots)
 tools/out/
+tools/blender/__pycache__/
