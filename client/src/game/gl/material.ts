@@ -1,7 +1,7 @@
 import { GLSL3, MeshDepthMaterial, RGBADepthPacking, ShaderMaterial, UniformsLib, UniformsUtils } from 'three';
 // The CPU palette is authored in display RGB. Write it directly, with no
 // tone mapping or linear-to-sRGB conversion after quantization.
-const common = /* glsl */ `
+export const pixelNoise = /* glsl */ `
 float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
 float noise21(vec2 p) {
  vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
@@ -58,7 +58,7 @@ void main() {
  // The software renderer stamps shadows in screen space, onto whichever
  // receiver is visible there. Project table receivers back onto that ground
  // ray before looking up the real light-space maps to preserve this look.
- if(surface.x==6. && vNormalWorld.z>.9) {
+ if((surface.x==6. || surface.x==9.) && vNormalWorld.z>.9) {
   worldPosition.xyz+=vec3(.145364,.717104,-.681639)*(worldPosition.z/.681639);
  }
  #include <shadowmap_vertex>
@@ -78,17 +78,19 @@ varying vec3 vWorld;
 varying vec3 vNormalWorld;
 uniform sampler2D windowPattern;
 uniform sampler2D snowPattern;
+uniform sampler2D footprints;
 uniform vec4 contactBalls[64];
 uniform int contactCount;
-${common}
+uniform float lampLevel;
+${pixelNoise}
 void main() {
  vec2 pixel=vec2(floor(gl_FragCoord.x),215.-floor(gl_FragCoord.y));
  float dither=bayer(pixel);
  if(dither>=vCoverage) discard;
  float kind=vSurface.x;
  vec3 p=vWorld, n=normalize(vNormalWorld), base=vBase;
- bool receiver=kind==4. || (kind==6. && n.z>0.9) || vSurface.w==3.;
- bool emissive=kind==3.;
+ bool receiver=kind==4. || ((kind==6. || kind==9.) && n.z>0.9) || vSurface.w==3.;
+ bool emissive=kind==3. || kind==8.;
  if(kind==5.) {
   if(n.y<-.9) {
    float col=floor((p.x+12.)/1.6), row=floor(p.z/2.4);
@@ -110,7 +112,7 @@ void main() {
  }
  vec3 lv=vec3(1.95,.35,3.25)-p;
  float dist=length(lv);
- float warm=max(0.,dot(n,lv/dist))*3.2*pow(max(0.,lv.z/dist),6.)/(1.+pow(dist/2.2,2.));
+ float warm=max(0.,dot(n,lv/dist))*3.2*lampLevel*pow(max(0.,lv.z/dist),6.)/(1.+pow(dist/2.2,2.));
  float light=.34+max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.42+warm;
  warm=clamp(warm,0.,1.);
  if(kind==1.) light+=(hash21(pixel)-.5)*.4;
@@ -129,6 +131,8 @@ void main() {
   if(warm>.12+(dither-.5)*.15) color=mix(color,vec3(255,190,116)/255.*m,min(.45,warm*.7));
   if(kind==2. && light>.85) color=vec3(252,250,244)/255.;
   if(emissive) color=base;
+  if(kind==8.) color=base*lampLevel;
+  if(kind==11.) color=base*.92;
  }
  // The original casts only on snow/table, then tints the already quantized
  // colour. Keep that rule, but derive occlusion from real shadow maps.
@@ -145,6 +149,12 @@ void main() {
   #endif
   if(lamp<.5) color*=vec3(.64,.65,.76);
   else if(moon<1.-dither*.65) color*=dither>.5?vec3(.8,.8,.87):vec3(.64,.65,.76);
+ }
+ if(kind==4. && abs(p.x)<3. && abs(p.y)<4.) {
+  float wear=texture2D(footprints,(p.xy+vec2(3.,4.))/vec2(6.,8.)).r;
+  // Three trample levels, with Bayer transitions rather than blended decals.
+  float stepWear=floor(wear*3.+dither)/3.;
+  color*=mix(vec3(1.),vec3(.68,.70,.78),stepWear);
  }
  // CPU clamps to its byte buffer before haze, including the bright lamp pool.
  color=clamp(color,0.,1.);
@@ -164,13 +174,15 @@ void main() {
   if(abs(p.z-contactBalls[i].z)<.01 && dot(delta,delta)<.0049) { color*=vec3(.64,.65,.76);break; }
  }
  outColor=vec4(color,1.);
- outSurface=vec4(n*.5+.5,receiver?1.:0.);
+ outSurface=vec4(n*.5+.5,(receiver || kind==10. || kind==11.)?1.:0.);
 }
 `;
+/** Shared by every pixel material, including asynchronously loaded skins. */
+export const lampUniform = { value: 1 };
 export function pixelMaterial(capsules = false) {
   return new ShaderMaterial({
     glslVersion: GLSL3, lights: true,
-    uniforms: { ...UniformsUtils.merge([UniformsLib.lights]), windowPattern: { value: null }, snowPattern: { value: null }, contactBalls: { value: new Float32Array(64 * 4) }, contactCount: { value: 0 } },
+    uniforms: { ...UniformsUtils.merge([UniformsLib.lights]), windowPattern: { value: null }, snowPattern: { value: null }, footprints: { value: null }, contactBalls: { value: new Float32Array(64 * 4) }, contactCount: { value: 0 }, lampLevel: lampUniform },
     defines: capsules ? { CAPSULE: 1 } : {}, vertexShader: vertex, fragmentShader: fragment,
   });
 }

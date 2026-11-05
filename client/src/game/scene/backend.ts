@@ -36,6 +36,7 @@ export function presentScene(ctx: CanvasRenderingContext2D, frame: SceneFrame) {
     ctx.drawImage(canvas, 0, 0);
   ctx.drawImage(canvas, frame.shakeX, frame.shakeY);
   samples[count++ % samples.length] = performance.now() - start;
+  return renderer.kind;
 }
 /** On-demand diagnostics; collection uses a fixed ring, no allocations per frame. */
 export function rendererDiagnostics() {
@@ -46,6 +47,9 @@ export function rendererDiagnostics() {
     medianMs: sorted[Math.floor(sorted.length * .5)] ?? 0, p95Ms: sorted[Math.floor(sorted.length * .95)] ?? 0,
     drawCalls: backend instanceof GLBackend ? backend.renderer.info.render.calls : null,
     triangles: backend instanceof GLBackend ? backend.renderer.info.render.triangles : null,
+    props: backend instanceof GLBackend ? backend.props.status : null,
+    paddles: backend instanceof GLBackend ? backend.paddles.status : null,
+    footprintStamps: backend instanceof GLBackend ? backend.footprints.stamps : null,
     player: backend instanceof GLBackend ? backend.player.status : null,
     stranger: backend instanceof GLBackend ? backend.stranger.status : null,
   };

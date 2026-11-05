@@ -11,6 +11,9 @@
   const snapshot={balls:scene.ballCount,player:scene.player.visible};
   scene.shakeX = scene.shakeY = 0;
   const cpu = new CPUBackend(), gl = new GLBackend();
+  gl.render(scene);
+  await Promise.all([gl.props.ready, gl.paddles.ready]);
+  for(let i=0;i<100 && (gl.player.status!=='glb' || gl.stranger.status!=='glb');i++) await new Promise(r=>setTimeout(r,20));
   const files = [];
   const makeCanvas = () => { const canvas = document.createElement('canvas'); canvas.width = 384; canvas.height = 216; return canvas; };
   const a = makeCanvas(), b = makeCanvas(), ca = a.getContext('2d'), cb = b.getContext('2d');
