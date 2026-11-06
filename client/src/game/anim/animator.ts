@@ -359,7 +359,7 @@ class Stranger extends Body {
   private readonly handTip: Vec3 = [0, 0, 0];
   feedAt = -Infinity;
   private pickupAt = -Infinity;
-  private releaseAt = -Infinity;
+  private feedReleaseAt = -Infinity;
   private feedX = 0;
   private feedStage = 0;
   constructor() {
@@ -369,7 +369,7 @@ class Stranger extends Body {
   feed(time: number, at: number, x: number) {
     this.feedAt = at; this.feedX = x;
     this.pickupAt = Math.max(time + 0.025, at - 0.19);
-    this.releaseAt = at - 0.075;
+    this.feedReleaseAt = at - 0.075;
     this.feedStage = 1;
     this.freeHand.plan(time, this.pickupAt - time, BASKET[0], BASKET[1], BASKET[2]);
   }
@@ -381,7 +381,7 @@ class Stranger extends Body {
       this.freeHand.sample(end);
       if (this.feedStage === 1) {
         this.feedStage = 2;
-        this.freeHand.plan(end, this.releaseAt - end, Math.max(0.22, this.feedX + 0.22), 1.62, 1.12);
+        this.freeHand.plan(end, this.feedReleaseAt - end, Math.max(0.22, this.feedX + 0.22), 1.62, 1.12);
       } else if (this.feedStage === 2) {
         this.feedStage = 3;
         const p = this.freeHand.position;
@@ -404,11 +404,11 @@ class Stranger extends Body {
   ball(time: number): Vec3 | undefined {
     if (time < this.pickupAt || time >= this.feedAt) return undefined;
     const p = this.feedPosition;
-    if (time < this.releaseAt) {
+    if (time < this.feedReleaseAt) {
       const hand = this.handTip;
       set(p, hand[0], hand[1], hand[2]);
     } else {
-      const q = clamp((time - this.releaseAt) / (this.feedAt - this.releaseAt), 0, 1);
+      const q = clamp((time - this.feedReleaseAt) / (this.feedAt - this.feedReleaseAt), 0, 1);
       set(p, this.release[0] + (this.feedX - this.release[0]) * q,
         this.release[1] + (CONTACT.strangerY - this.release[1]) * q,
         this.release[2] + (CONTACT.serveZ - this.release[2]) * q + 0.04 * Math.sin(Math.PI * q));
