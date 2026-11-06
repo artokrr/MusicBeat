@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
 import type { Beatmap, BeatNote, LaneIndex, NoteType } from '../types/beatmap';
 import { useGameStore } from '../store/gameStore';
 import type { HitResult } from '../types/game';
@@ -6,6 +6,8 @@ import PixelStage from './pixel/PixelStage';
 import { renderFrame, spawnBurst } from './pixel/renderer';
 import type { FrameWorld } from './pixel/renderer';
 import { PAL } from './pixel/stage';
+import { FEED_LEAD, RALLY_MAX_RETURN, RETURN_FADE_SECONDS } from './anim/flight';
+import type { OpponentNote } from './anim/flight';
 
 export type GameSoundEvent =
   | { kind: 'hit'; result: Exclude<HitResult, 'miss'>; lane: LaneIndex; noteType: NoteType }
@@ -107,6 +109,9 @@ interface ActiveNote extends BeatNote {
   returnStartY?: number;
   /** Song time of the press that returned this ball. */
   hitTime?: number;
+  returnStartedAt?: number;
+  nextTime?: number;
+  nextStartX?: number;
 
   // For missed ball physics
   missTime?: number;
@@ -122,10 +127,20 @@ interface ActiveNote extends BeatNote {
 }
 
 export default function Game({ beatmap, currentTime, isPlaying, volume, onSound, countdown = null, fadeStartMs = null, children }: GameProps) {
+  // Cache only the visual origins/lookahead. Incoming spawning and judgement stay below.
+  const opponentSchedule = useMemo<OpponentNote[]>(() => {
+    const schedule = beatmap.notes.map(note => ({
+      time: note.time, type: note.type,
+      startX: note.type === 'switch' && note.switchFromLaneIndex !== undefined
+        ? LANES[note.switchFromLaneIndex] : CENTER_X + (pseudoRandom01(note.time * 91.7) - 0.5) * 60,
+      targetX: LANES[note.laneIndex],
+    }));
+    return schedule.map((note, i) => ({ ...note, nextTime: schedule[i + 1]?.time, nextStartX: schedule[i + 1]?.startX }));
+  }, [beatmap]);
+  const upcomingFeedsRef = useRef<OpponentNote[]>([]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const activeNotesRef = useRef<Map<string, ActiveNote>>(new Map());
   const animFrameRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(0);
   const lastServeTimeRef = useRef<number>(0);
   const isHoldingRef = useRef<boolean>(false);
   const holdingLaneRef = useRef<LaneIndex | null>(null);
@@ -235,6 +250,7 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
       note.hit = true;
       note.hitResult = result;
       note.hitTime = currentTime;
+      note.returnStartedAt = currentTime;
 
       if (result !== 'miss') {
         note.returnPhase = true;
@@ -420,9 +436,6 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
     if (!ctx) return;
 
     const render = () => {
-      const deltaTime = currentTime - lastTimeRef.current;
-      lastTimeRef.current = currentTime;
-
       const activeNotes = activeNotesRef.current;
       
       // Get dynamic approach time from difficulty settings
@@ -430,8 +443,12 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
       const approachTime = settings.approachTime;
 
       // Add upcoming notes
-      beatmap.notes.forEach((note) => {
+      const upcomingFeeds = upcomingFeedsRef.current;
+      upcomingFeeds.length = 0;
+      beatmap.notes.forEach((note, index) => {
         const timeUntil = note.time - currentTime;
+        if (timeUntil > approachTime && timeUntil <= approachTime + FEED_LEAD)
+          upcomingFeeds.push(opponentSchedule[index]);
 
         if (timeUntil > 0 && timeUntil <= approachTime && !activeNotes.has(note.id)) {
           const laneIndex = note.laneIndex;
@@ -456,6 +473,8 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
             returnPhase: false,
             returnProgress: 0,
             spawnTime: currentTime,
+            nextTime: opponentSchedule[index].nextTime,
+            nextStartX: opponentSchedule[index].nextStartX,
             startX,
             targetX,
             switchControlX,
@@ -540,6 +559,7 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
             note.hitResult = note.holdStartResult ?? 'ok';
             note.returnPhase = true;
             note.returnProgress = 0;
+            note.returnStartedAt = currentTime;
             note.returnStartX = note.x;
             note.returnStartY = note.y;
 
@@ -634,28 +654,14 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
             return;
           }
         } else if (note.returnPhase) {
-          note.returnProgress += deltaTime * 2.5;
-
-          if (note.returnProgress >= 1) {
+          const age = currentTime - (note.returnStartedAt ?? note.hitTime ?? currentTime);
+          // Keep visual returns through their ground bounce/fade. The animator uses
+          // the actual paddle contact for its departure and any rally deadline.
+          note.returnProgress = age / 0.4;
+          if (age > RALLY_MAX_RETURN + RETURN_FADE_SECONDS + 0.12) {
             activeNotes.delete(id);
             return;
           }
-
-          // Return arc - ball hit back to NPC
-          // Start from WHERE IT WAS HIT, not the player center
-          const returnProgress = note.returnProgress;
-          const startX = note.returnStartX ?? note.targetX;
-          const startY = note.returnStartY ?? PLAYER_HIT_Y;
-          const endY = NPC_HIT_Y;
-
-          // Linear Y with arc
-          const yBase = startY + (endY - startY) * returnProgress;
-          const returnArc = Math.sin(returnProgress * Math.PI) * 40;
-          note.y = yBase - returnArc;
-
-          // X goes back towards center (NPC always centered)
-          const returnTargetX = CENTER_X;
-          note.x = startX + (returnTargetX - startX) * returnProgress;
         }
       });
 
@@ -689,6 +695,7 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
         beat: isPlaying ? (currentTime * beatmap.timing.bpm) / 60 : nowMs / 900,
         approachTime,
         notes: Array.from(activeNotes.values()),
+        upcomingFeeds,
         world: WORLD,
         playerX: playerVisualXRef.current,
         serving: lastServeTimeRef.current > 0 && currentTime - lastServeTimeRef.current < 0.12,

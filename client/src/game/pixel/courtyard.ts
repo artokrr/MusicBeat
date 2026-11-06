@@ -43,6 +43,7 @@ export function paintCourtyardGeometry(R: CourtyardPainter) {
   paintTable(R);
   paintLampPost(R);
   paintBench(R);
+  paintBallBasket(R);
   paintTree(R, [-3.4, 3.6, 0], 1.9, 0.13, 11);
   paintTree(R, [3.9, 3.9, 0], 1.7, 0.11, 23);
 }
@@ -175,4 +176,24 @@ function fog(R: Renderer3D) {
     R.pix[o + 1] = lerp(R.pix[o + 1]!, haze[1], k);
     R.pix[o + 2] = lerp(R.pix[o + 2]!, haze[2], k);
   }
+}
+
+
+/** Static low-cost basket for CPU and the GL asset-loading fallback. */
+function paintBallBasket(R: CourtyardPainter) {
+  const x = 0.78, y = 1.95;
+  for (const dx of [-0.16, 0.16]) for (const dy of [-0.14, 0.14])
+    R.box(x + dx - .012, y + dy - .012, .02, x + dx + .012, y + dy + .012, .76, METAL);
+  R.box(x - .2, y - .17, .74, x + .2, y + .17, .77, METAL);
+  for (const z of [.78, .87, .98]) {
+    R.box(x - .21, y - .18, z - .01, x + .21, y - .16, z + .01, METAL);
+    R.box(x - .21, y + .16, z - .01, x + .21, y + .18, z + .01, METAL);
+    R.box(x - .21, y - .17, z - .01, x - .19, y + .17, z + .01, METAL);
+    R.box(x + .19, y - .17, z - .01, x + .21, y + .17, z + .01, METAL);
+  }
+  for (const dx of [-.16, -.08, 0, .08, .16]) for (const dy of [-.17, .17])
+    R.box(x + dx - .006, y + dy - .006, .77, x + dx + .006, y + dy + .006, .98, METAL);
+  for (const dx of [-.12, 0, .12]) for (const dy of [-.07, .07])
+    R.capsule([x + dx, y + dy, .93], [x + dx, y + dy, .94], .043, .043, LINE);
+  R.castShadow([x, y, .85], .23, 2);
 }

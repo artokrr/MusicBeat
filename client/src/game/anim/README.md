@@ -32,8 +32,10 @@ allocate no arrays/objects. Reset and construction allocate the rig and a fixed
   height, and push 9 cm on release. Misses reach low and late, drop the shoulder,
   and recover without overriding the preparation of another imminent note.
 - The stranger breathes only a few millimetres, tilts their head very slowly,
-  makes a short free-hand toss, and uses compact strokes. Return deadlines are
-  retained even after gameplay removes the returning note. Cloth trails local
+  feeds balls from a waist-height basket with its free hand, and uses compact
+  strokes. A successful return carries the next consecutive note when its
+  launch is 0.35-1.0 seconds after actual player contact. Other returns pass
+  left of the stranger, bounce on the snow and fade while rolling away. Cloth trails local
   body velocity through slow springs; `figures.ts` now consumes lateral lag too.
 
 ## Coordinates and input limits
@@ -44,12 +46,14 @@ and the two feet positions together with the renderer. Normal arrival height
 is `TABLE_Z + BALL_R + flightHeight(1) = 1.055 m`; a new serve is `1.035 m`;
 held balls use the renderer's separate `1.000 m` height. Contact y is -1.5 / +1.5.
 Player root is approximately `courtX(playerX) - .3`; stranger root is to the
-right of its paddle. Returns reach **x = 0**, regardless of `startX`.
+right of its paddle. Rally returns reach the next note's exact `startX`, y=1.5, z=1.035. Drill
+returns clear the stranger at x=-0.88.
 
 Known incoming notes are anticipated to meet their scheduled beat exactly.
-FrameState contains no future serve before it launches, and no future keypress.
-A newly revealed serve or an input with no ball gets a **65 ms continuous
-reaction stroke**, not an instantaneous pose jump.
+FrameState contains a render-only `upcomingFeeds` preview for 320 ms before
+a launch, and no future keypress.
+An input with no ball gets a **65 ms continuous reaction stroke**. Normal
+feeds are prepared from the preview and meet their original launch deadline.
 
 A pressed ball is met where it really is (`strike`). The paddle reaches the
 ball's path 16-70 ms after the press (no faster than 7 m/s from where the hand
@@ -61,9 +65,9 @@ in; late, the ball has passed the hit line and dropped, so the stroke is a
 cramped upward flick with the body leaning back. "ok" presses also cost a little
 balance. If the beat arrives with no press, the swing checks (`wait`) and the
 ball runs on, slowing to rest 30 cm past the hit line (`flight.ts`), which is
-where a missed ball's fall starts. Overlapping
-opponent serves/returns are performed in deadline order; coincident balls at
-different positions cannot all physically touch one paddle at the same instant.
+where a missed ball's fall starts. Opponent events now represent launches only: either a basket feed or the
+next stroke of a rally. Discarded returns do not compete with incoming feeds
+for the paddle. A miss creates no return plan and the next note is fed anew.
 
 The current CPU figure draws spherical heads, so gaze is conveyed by neck/head
 position and tilt rather than an independently rotated face mesh.
@@ -73,7 +77,9 @@ position and tilt rather than an independently rotated face mesh.
 `renderer.ts` only creates the animator, calls `update` / `idle`, and passes the
 poses to `drawFigure`. Old angle-pose selection and its five globals are removed;
 `pose.ts` remains available for other consumers. The only figure change is the
-two hem-coordinate expressions using `cloth.swingSide`. `Game.tsx` is untouched.
+two hem-coordinate expressions using `cloth.swingSide`. `Game.tsx` supplies cached visual lookahead and retains returned notes through
+their disposal fade. Its incoming spawn conditions, input, judgement and score
+paths are unchanged.
 
 Run from repository root (no installation):
 
@@ -123,3 +129,28 @@ GameScreen countdown was present; there were no runtime exceptions. Evidence:
 `tools/out/game-verification.json`, `anim-gameplay-sheet.png`, `anim-gameplay.mp4`,
 `anim-*.png`, and `anim-trajectories.png`. The MP4 is a 12 fps review sequence
 of captured frames, not a real-time recording.
+
+
+## Rally and feed verification
+
+`tools/rally-check.js` is a browser probe for `tools/shot.mjs --after`. It runs
+real `describeFrame` output at 200 Hz and checks sparse chains, 250 ms feeds,
+24 consecutive 130 ms feeds, a broken rally, early/late presses near the minimum gap, and a
+long pause. It measures launch paddle contact, handoff position, fixed free-arm
+lengths and returns reaching the snow before fading. Fixtures exercise long
+rallies without modifying any generated song or beatmap format.
+
+The stranger-specific feed arm is in `Stranger extends Body`; the shared Body
+and all player stroke code are kept intact for the parallel player-animation
+work. Return plans, contact history and opponent events use fixed 64-slot storage. `strikeFor`
+continues to determine the exact returned ball origin. Holds leave from the
+held position when they complete. A backwards song-time jump clears all plans.
+
+The basket is generated with:
+
+```sh
+/Applications/Blender.app/Contents/MacOS/Blender --background --python tools/blender/build_basket.py
+```
+
+Its 1,100 triangles use the existing metal/court-line palette. Placement in
+`gl/props.ts`, `pixel/courtyard.ts`, and `anim/flight.ts` must stay aligned.

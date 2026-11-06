@@ -56,3 +56,52 @@ export function incomingBall(note: IncomingNote, songTime: number, approachTime:
   out[2] = BALL_ON_TABLE_Z + flightHeight(p);
   return out;
 }
+
+
+/** Visual-only launch preview. The beatmap and its judgement never change. */
+export interface OpponentNote extends IncomingNote {
+  nextTime?: number;
+  nextStartX?: number;
+}
+export const FEED_LEAD = 0.32;
+export const RALLY_MIN_RETURN = 0.35;
+export const RALLY_MAX_RETURN = 1.0;
+export const DRILL_RETURN_SECONDS = 0.55;
+export const RETURN_FADE_SECONDS = 1.25;
+/** Basket rim, within the stranger's free-hand reach. Same placement as props.ts. */
+export const BASKET: Readonly<Vec3> = [0.78, 1.95, 0.98];
+
+export interface ReturnFlight {
+  id: number;
+  startAt: number;
+  endAt: number;
+  /** Next note's time, or Infinity when this ball leaves play. */
+  rallyTime: number;
+  endX: number;
+  from: Vec3;
+}
+
+/** One bounce on the far half, arriving at precisely the next incoming origin. */
+export function returningBall(flight: ReturnFlight, time: number, out: Vec3): Vec3 {
+  const p = Math.max(0, Math.min(1, (time - flight.startAt) / (flight.endAt - flight.startAt)));
+  out[0] = flight.from[0] + (flight.endX - flight.from[0]) * p;
+  out[1] = flight.from[1] + (1.5 - flight.from[1]) * p;
+  // Correct both endpoints without changing the table bounce.
+  out[2] = BALL_ON_TABLE_Z + flightHeight(p);
+  if (p < BOUNCE_AT) out[2] += (flight.from[2] - (BALL_ON_TABLE_Z + flightHeight(0))) * (1 - p / BOUNCE_AT) ** 2;
+  else out[2] -= 0.02 * ((p - BOUNCE_AT) / (1 - BOUNCE_AT)) ** 2;
+  if (time > flight.endAt && !Number.isFinite(flight.rallyTime)) {
+    // Clear the stranger's left side, fall to the snow, bounce once, then roll.
+    // The far-half bounce already happened above; there is no mid-air cull.
+    const age = time - flight.endAt;
+    out[0] -= 0.55 * age;
+    out[1] += 1.8 * (1 - Math.exp(-3 * age));
+    const impact = Math.sqrt((1.035 - 0.055) / 4.9);
+    if (age < impact) out[2] = 1.035 - 4.9 * age * age;
+    else {
+      const bounce = age - impact;
+      out[2] = 0.055 + Math.max(0, 0.9 * bounce - 4.9 * bounce * bounce);
+    }
+  }
+  return out;
+}

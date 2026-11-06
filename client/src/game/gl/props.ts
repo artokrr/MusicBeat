@@ -7,6 +7,7 @@ import type { BufferGeometry, Material, MeshStandardMaterial, ShaderMaterial } f
 import type { Vec3 } from '../rig/joints';
 
 const PLACEMENTS: ReadonlyArray<readonly [string, Vec3]> = [
+  ['ball_basket', [0.78, 1.95, 0]],
   ['table', [0, 0, 0]], ['bench', [-3, .6, 0]], ['lamppost', [2.25, .35, 0]],
   ['tree_bare_a', [-3.4, 3.6, 0]], ['tree_bare_b', [3.9, 3.9, 0]],
   // Entrance (door + canopy) off-screen right: from this camera its roof reads as a slab.
@@ -56,7 +57,7 @@ export function propGeometry(root: Group, offset: Vec3 = [0, 0, 0]) {
       for (let i = group.start; i < group.start + group.count; i++) {
         colors.setXYZ(i, color.r, color.g, color.b);
         surface.setXYZW(i, kind, grain, .25, flags);
-        if (name === 'court_line' && positions.getZ(i) > .89) {
+        if (o.name === 'table_court_line' && name === 'court_line' && positions.getZ(i) > .89) {
           // Give the tape a 1px minimum silhouette from the fixed camera.
           positions.setY(i, positions.getY(i) * 3);
           surface.setX(i, 11);
@@ -89,7 +90,7 @@ export function disposeProp(root: Group) {
   });
 }
 
-/** Keep the complete procedural yard until all six assets are ready. Replace
+/** Keep the complete procedural yard until all assets are ready. Replace
  * only colour geometry; retain the deliberately soft original shadow proxies. */
 export class AuthoredCourtyard {
   status: 'loading' | 'glb' | 'fallback' = 'loading';
