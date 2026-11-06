@@ -47,6 +47,15 @@ class Body {
   /** Lean from the last stroke's timing: + jammed by a late ball, - reaching for an early one. */
   readonly strain = new Spring();
   leanGoal = 0;
+  // Player-only secondary motion; the stranger never schedules these cues.
+  stanceY = 0;
+  splitContact = -Infinity;
+  splitStart = -Infinity;
+  splitSeen = -Infinity;
+  releaseAt = -Infinity;
+  readonly holding = new Spring();
+  readonly armSwing = new Spring();
+  readonly idleWeight = new Spring();
   readonly gazeX = new Spring();
   readonly gazeZ = new Spring(1.05);
   readonly clothX = new Spring();
@@ -114,9 +123,13 @@ class Body {
     if (Math.abs(x - this.eventX) > 0.035) this.strokeSide = (x - this.x.value) * this.facing < 0.04 ? -1 : 1;
     this.mode = 'contact'; this.struck = true; this.timing = timing; this.leanGoal = timing;
     // The striking-side foot lunges toward an early ball or steps back from a late one.
-    if (timing !== 0) {
-      const foot = this.facing === 1 ? this.right : this.left;
-      foot.step(foot.goal, this.facing * (timing < 0 ? -0.24 * timing : -0.2 * timing));
+    if (this.facing === 1) {
+      // Queue the fore/aft step. Never restart an airborne foot or lift the
+      // support foot while the lateral shuffle is still landing.
+      this.stanceY = Math.abs(x - (this.x.value + 0.3)) < 0.20 && Math.abs(this.x.velocity) < 0.6
+        ? timing < 0 ? -0.21 * timing : -0.18 * timing : 0;
+    } else if (timing !== 0) {
+      this.left.step(this.left.goal, this.facing * (timing < 0 ? -0.24 * timing : -0.2 * timing));
     }
     this.eventX = x; this.eventY = y; this.eventZ = z;
     const f = this.facing, early = Math.max(0, -timing), late = Math.max(0, timing);
@@ -126,6 +139,7 @@ class Body {
   }
   follow(time: number, push = false) {
     this.mode = 'follow';
+    if (push && this.facing === 1) this.releaseAt = time;
     const f = this.facing, early = push ? 0 : Math.max(0, -this.timing), late = push ? 0 : Math.max(0, this.timing);
     const reach = push ? 0.025 : 0.09 * (1 - 0.6 * early - 0.3 * late);
     const forward = push ? 0.09 : 0.095 * (1 - 0.5 * early - 0.45 * late);
@@ -139,7 +153,9 @@ class Body {
     this.hand.plan(time, 0.16, this.eventX - this.facing * this.strokeSide * 0.02, this.eventY - this.facing * 0.1, this.eventZ - 0.05);
   }
   settleFeet() {
-    for (const foot of [this.left, this.right]) if (foot.goalY !== 0) foot.step(foot.goal, 0);
+    if (this.facing === 1) { this.stanceY = 0; return; }
+    if (this.left.goalY !== 0) this.left.step(this.left.goal, 0);
+    if (this.right.goalY !== 0) this.right.step(this.right.goal, 0);
   }
   recover(time: number) {
     this.mode = 'recover';
@@ -164,7 +180,23 @@ class Body {
     }
     this.hand.sample(time);
   }
+  /** A toe-grounded split-step, keyed to the opponent's actual hand deadline. */
+  splitStep(time: number, opponentContact: number, nextContact: number) {
+    if (opponentContact === this.splitSeen) return;
+    this.splitSeen = opponentContact;
+    // Leave room to land before preparing another stroke. In dense streams,
+    // a quiet base matters more than repeating a hop on every opponent ball.
+    if (this.held || opponentContact < time + 0.025 || opponentContact > time + 0.32
+      || opponentContact - this.contactAt < 0.32 || nextContact - opponentContact < 0.36
+      || this.left.phase < 1 || this.right.phase < 1 || Math.abs(this.x.velocity) > 0.65
+      || time < this.splitContact + 0.5 || this.mode === 'miss') return;
+    this.splitContact = opponentContact;
+    this.splitStart = Math.max(time, opponentContact - 0.12);
+  }
   idle(time: number) {
+    if (this.facing === 1) {
+      this.splitContact = this.splitStart = this.splitSeen = this.releaseAt = -Infinity;
+    }
     this.held = false;
     this.recover(time);
     const b = this.balance.position;
@@ -174,7 +206,21 @@ class Body {
   render(time: number, dt: number, targetX: number, gazeX: number, gazeZ: number, idle: boolean) {
     const f = this.facing, npc = f === -1, j = this.pose.joints;
     this.ambientTime += dt;
-    const breath = Math.sin(this.ambientTime * (npc ? 1.15 : 1.65)) * (npc ? 0.003 : 0.006);
+    const breath = Math.sin(this.ambientTime * (npc ? 1.15 : 1.65)) * (npc ? 0.003 : idle ? 0.012 : 0.006);
+    const hold = npc ? 0 : this.holding.update(this.mode === 'hold' ? 1 : 0, 12, dt);
+    const release = npc ? 0 : Math.sin(Math.PI * clamp((time - this.releaseAt) / 0.3, 0, 1)) ** 2;
+    const rest = npc ? 0 : this.idleWeight.update(idle ? 1 : 0, 5, dt);
+    const sway = rest * Math.sin(this.ambientTime * 0.72);
+    let split = 0, heel = 0;
+    if (!npc && time >= this.splitStart && time < this.splitContact + 0.22) {
+      const since = time - this.splitContact;
+      if (since < -0.025) split = -0.025 * smooth((time - this.splitStart) / (this.splitContact - 0.025 - this.splitStart));
+      else if (since < 0.025) split = -0.025 + 0.063 * smooth((since + 0.025) / 0.05);
+      else if (since < 0.085) split = 0.038 - 0.073 * smooth((since - 0.025) / 0.06);
+      else split = -0.035 * (1 - smooth((since - 0.085) / 0.135));
+      // Unweight through the ankles, with toes on the ground: no floating feet.
+      heel = 0.025 * Math.sin(Math.PI * clamp((since + 0.025) / 0.11, 0, 1)) ** 2;
+    }
     this.x.update(targetX + (idle ? Math.sin(this.ambientTime * 0.47) * (npc ? 0.002 : 0.012) : 0), npc ? 11 : 14, dt);
     const vx = this.x.velocity;
     const stroke = this.mode === 'contact' || this.mode === 'follow';
@@ -184,19 +230,30 @@ class Body {
     const reaching = Math.max(0, -strain), jammed = Math.max(0, strain);
     const turn = this.mode === 'wind' ? -0.25 : stroke ? 0.23 * (1 - 0.45 * jammed) : this.mode === 'hold' ? 0.08 : this.mode === 'wait' ? -0.06 : 0;
     this.twist.update(turn * this.strokeSide + clamp(-vx * f * 0.06, -0.1, 0.1), 20, dt);
-    this.load.update(stroke ? 0.018 : this.mode === 'wind' ? -0.012 : 0, 16, dt);
+    this.load.update(npc ? (stroke ? 0.018 : this.mode === 'wind' ? -0.012 : 0)
+      : (stroke ? 0.018 : this.mode === 'wind' ? -0.012 : 0) + hold * 0.045 - release * 0.04, 16, dt);
     // A stroke at the edge of the window ("ok") also costs a little balance.
     this.slump.update(this.mode === 'miss' ? 1 : Math.max(0, Math.abs(strokeTiming) - 0.7), 9, dt);
     this.readyX = this.x.value + f * 0.34;
-    this.readyY = this.feetY + f * 0.48;
-    this.readyZ = 1.08 + breath;
+    this.readyY = this.feetY + f * 0.48 - rest * 0.035;
+    this.readyZ = 1.08 + breath - rest * 0.07;
+    if (!npc && this.mode === 'recover' && this.hand.end - time > 0.09) {
+      // Finish the recovery above the moving stance, not its old lane. Retain
+      // both velocity and the original deadline so this cannot stall recovery.
+      this.hand.plan(time, this.hand.end - time, this.readyX, this.readyY, this.readyZ);
+    }
     if (this.mode === 'ready') {
       // Retarget the ready stance slowly; strokes are never low-pass filtered
       // after IK, which would make their paddles arrive late.
       this.hand.plan(time, 0.12, this.readyX, this.readyY, this.readyZ);
     }
-    this.left.update(dt, npc ? 0.19 : 0.155); this.right.update(dt, npc ? 0.19 : 0.155);
-    if (this.left.phase === 1 && this.right.phase === 1) {
+    // Gather a trailing foot sooner only when a wide reversal is taking the
+    // hips beyond its support. Ordinary shuffles keep their original cadence.
+    const hurry = npc ? 0 : smooth((Math.max(Math.abs(this.x.value - 0.09 - this.left.x),
+      Math.abs(this.x.value + 0.09 - this.right.x)) - 0.26) / 0.20);
+    const stepDuration = npc ? 0.19 : 0.155 - hurry * 0.08;
+    this.left.update(dt, stepDuration); this.right.update(dt, stepDuration);
+    if (this.left.phase === 1 && this.right.phase === 1 && heel === 0) {
       const desired = this.x.value + clamp(vx * 0.10, -0.13, 0.13);
       const l = desired - f * 0.23, r = desired + f * 0.23;
       const le = Math.abs(l - this.left.x), re = Math.abs(r - this.right.x);
@@ -204,11 +261,14 @@ class Body {
       if (Math.max(le, re) > 0.10) {
         const leading = vx * f > 0 ? this.right : this.left;
         const foot = Math.abs(le - re) < 0.04 ? leading : le > re ? this.left : this.right;
-        foot.step(foot === this.left ? l : r);
+        foot.step(foot === this.left ? l : r, npc ? foot.goalY : foot === this.right ? this.stanceY : 0);
+      } else if (!npc && Math.abs(vx) < 0.25 && Math.max(le, re) < 0.07
+        && Math.abs(this.right.y - this.stanceY) > 0.012) {
+        this.right.step(this.right.x, this.stanceY);
       }
     }
-    const pelvisZ = (npc ? 0.87 : 0.79) + breath - this.load.value - this.slump.value * 0.025 - 0.05 * reaching - 0.02 * jammed;
-    const pelvisY = this.feetY + f * (0.065 + this.load.value + 0.10 * reaching - 0.07 * jammed);
+    const pelvisZ = (npc ? 0.87 : 0.79) + breath - this.load.value - this.slump.value * 0.025 - 0.05 * reaching - 0.02 * jammed + split + rest * 0.018;
+    const pelvisY = this.feetY + f * (0.065 + this.load.value + 0.10 * reaching - 0.07 * jammed + hold * 0.025 + release * 0.045);
     set(j.pelvis, this.x.value, pelvisY, pelvisZ);
     const hipTurn = -this.twist.value * 0.25;
     set(this.pose.forward, Math.sin(hipTurn) * f, Math.cos(hipTurn) * f, 0);
@@ -216,8 +276,8 @@ class Body {
     set(this.pose.chestForward, turnX, turnY, 0);
     set(j.hipL, this.x.value - f * 0.09, pelvisY, pelvisZ);
     set(j.hipR, this.x.value + f * 0.09, pelvisY, pelvisZ);
-    set(j.ankleL, this.left.x, this.feetY + f * 0.065 + this.left.y, 0.075 + this.left.lift);
-    set(j.ankleR, this.right.x, this.feetY - f * 0.065 + this.right.y, 0.075 + this.right.lift);
+    set(j.ankleL, this.left.x, this.feetY + f * 0.065 + this.left.y, 0.075 + this.left.lift + heel);
+    set(j.ankleR, this.right.x, this.feetY - f * 0.065 + this.right.y, 0.075 + this.right.lift + heel);
     set(j.toeL, this.left.x - f * 0.025, j.ankleL[1] + f * 0.16, 0.025 + this.left.lift);
     set(j.toeR, this.right.x + f * 0.025, j.ankleR[1] + f * 0.16, 0.025 + this.right.lift);
     solveTwoBone(j.hipL, j.ankleL, j.kneeL, 0.43, 0.43, -f * 0.12, f, 0);
@@ -229,7 +289,7 @@ class Body {
     const reachSide = clamp((p[0] - this.x.value - f * 0.2) * 0.38, -0.20, 0.20);
     const shoulderY = pelvisY + f * ((npc ? 0.16 : 0.23) + 0.10 * reaching - 0.08 * jammed);
     const shoulderZ = pelvisZ + 0.45 - this.slump.value * 0.045 - 0.03 * reaching - 0.03 * jammed;
-    let shoulderX = this.x.value + reachSide;
+    let shoulderX = this.x.value + reachSide + sway * 0.035;
     // Reach from the torso, never stretch an arm. Smooth radial compensation
     // is normally just a few cm; essential during 8 Hz cross-court streams.
     const rx = p[0] - (shoulderX + turnY * 0.2), ry = p[1] - (shoulderY - turnX * 0.2), rz = p[2] - shoulderZ;
@@ -243,11 +303,12 @@ class Body {
     set(j.shoulderL, shoulderX - turnY * 0.2, sy + turnX * 0.2, sz);
     set(j.shoulderR, shoulderX + turnY * 0.2, sy - turnX * 0.2, sz);
     this.gazeX.update(gazeX, 7, dt); this.gazeZ.update(gazeZ, 7, dt);
-    const lookSide = clamp((this.gazeX.value - shoulderX) * 0.055, -0.035, 0.035);
+    const lookSide = clamp((this.gazeX.value - shoulderX) * (npc ? 0.055 : 0.10), npc ? -0.035 : -0.055, npc ? 0.035 : 0.055);
+    const lookDown = npc ? 0 : clamp(1.14 - this.gazeZ.value, -0.16, 0.5) * 0.09 + this.slump.value * 0.025;
     const tilt = npc ? Math.sin(this.ambientTime * 0.19) ** 9 * 0.018 : 0;
     set(j.head, j.neck[0] + lookSide + tilt, j.neck[1] + f * 0.035,
       j.neck[2] + 0.15 - clamp(1.1 - this.gazeZ.value, 0, 0.7) * 0.025);
-    set(j.headTop, j.head[0] + tilt * 0.5, j.head[1] - f * 0.008, j.head[2] + 0.15);
+    set(j.headTop, j.head[0] + tilt * 0.5, j.head[1] - f * (0.008 - lookDown), j.head[2] + 0.15);
 
     // Treat forearm + grip + blade as one collinear IK link: the paddle centre
     // is the end effector, so its target is exact without a fake detached bat.
@@ -267,8 +328,17 @@ class Body {
 
     const toss = npc ? smooth((this.tossUntil - time) / 0.12) : 0;
     this.balance.sample(time);
-    this.balance.plan(time, 0.15, shoulderX - f * (0.28 + clamp(vx * f * 0.025, -0.05, 0.05)),
-      sy + f * (0.23 + toss * 0.12), 1.10 + toss * 0.16 - this.twist.value * 0.08);
+    if (npc) {
+      this.balance.plan(time, 0.15, shoulderX - f * (0.28 + clamp(vx * f * 0.025, -0.05, 0.05)),
+        sy + f * (0.23 + toss * 0.12), 1.10 + toss * 0.16 - this.twist.value * 0.08);
+    } else {
+      // Let the off hand open against the stroke, then fold back in. Its
+      // delayed response breaks the rigid "both elbows up" silhouette.
+      const counter = this.armSwing.update(stroke ? this.strokeSide : this.mode === 'wind' ? -this.strokeSide * 0.45 : 0, 11, dt);
+      this.balance.plan(time, 0.18, shoulderX - (0.29 + clamp(vx * 0.04, -0.065, 0.065)) - counter * 0.045,
+        sy + 0.21 - counter * 0.09 + hold * 0.055 - rest * 0.045,
+        1.06 + counter * 0.055 + hold * 0.035 - this.slump.value * 0.10 - rest * 0.09 + split * 0.5 + sway * 0.02);
+    }
     set(j.wristL, this.balance.position[0], this.balance.position[1], this.balance.position[2]);
     solveTwoBone(j.shoulderL, j.wristL, j.elbowL, 0.30, 0.27, -f * 0.35, -f * 0.08, -1);
     const ll = Math.hypot(j.wristL[0] - j.elbowL[0], j.wristL[1] - j.elbowL[1], j.wristL[2] - j.elbowL[2]) || 1;
@@ -400,6 +470,8 @@ export function createAnimator(): Animator {
       lastMiss = missed.missTime!;
       if (!held && (!next || next.time - t > 0.18)) {
         player.mode = 'miss';
+        player.leanGoal = 0;
+        player.settleFeet();
         player.hand.plan(t, 0.19, courtX(missed.targetX), CONTACT.playerY - 0.13, 0.86);
       }
     }
@@ -427,7 +499,13 @@ export function createAnimator(): Animator {
       ? (1 - flight) ** 2 * look.startX + 2 * flight * (1 - flight) * look.switchControlX + flight * flight * look.targetX
       : look.startX + (look.targetX - look.startX) * flight) : 0;
     const gazeZ = 0.815 + height;
-    player.render(t, dt, bodyX, gazeX, gazeZ, false);
+    // Read the stranger's scheduled contact without changing its event queue.
+    player.splitStep(t, stranger.contactAt, held ? t : next?.time ?? Infinity);
+    // Track the real incoming/held height, including a ball running past the
+    // line. Keep the stranger's existing gaze calculation independent.
+    if (look) incomingBall(look, t, frame.approachTime, ball);
+    player.render(t, dt, bodyX, look ? ball[0] : gazeX,
+      held ? CONTACT.holdZ : look ? ball[2] : gazeZ, false);
     const npcX = event && event.at - t < 0.4 ? event.x : stranger.eventX;
     stranger.render(t, dt, npcX + 0.28, gazeX, gazeZ, false);
     return result;
