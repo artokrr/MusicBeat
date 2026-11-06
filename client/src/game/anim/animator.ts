@@ -126,8 +126,7 @@ class Body {
     if (this.facing === 1) {
       // Queue the fore/aft step. Never restart an airborne foot or lift the
       // support foot while the lateral shuffle is still landing.
-      this.stanceY = Math.abs(x - (this.x.value + 0.3)) < 0.20 && Math.abs(this.x.velocity) < 0.6
-        ? timing < 0 ? -0.21 * timing : -0.18 * timing : 0;
+      this.stanceY = timing < 0 ? -0.34 * timing : -0.30 * timing;
     } else if (timing !== 0) {
       this.left.step(this.left.goal, this.facing * (timing < 0 ? -0.24 * timing : -0.2 * timing));
     }
@@ -159,7 +158,9 @@ class Body {
   }
   recover(time: number) {
     this.mode = 'recover';
-    this.settleFeet();
+    // Carry the loaded stance through recovery; a new ball can still interrupt
+    // it via prepare(). Returning the foot at follow-through hid the whole step.
+    if (this.facing === -1 || this.timing === 0) this.settleFeet();
     this.hand.plan(time, 0.28 + 0.1 * Math.abs(this.timing), this.readyX, this.readyY, this.readyZ);
     this.timing = 0;
   }
@@ -175,20 +176,25 @@ class Body {
         if (this.facing === 1 && !this.struck) this.wait(end);
         else this.follow(end);
       } else if (this.mode === 'follow' || this.mode === 'miss' || this.mode === 'wait') this.recover(end);
-      else if (this.mode === 'recover') { this.mode = 'ready'; this.leanGoal = 0; break; }
+      else if (this.mode === 'recover') {
+        this.mode = 'ready'; this.leanGoal = 0;
+        if (this.facing === 1) this.settleFeet();
+        break;
+      }
       else break;
     }
     this.hand.sample(time);
   }
-  /** A toe-grounded split-step, keyed to the opponent's actual hand deadline. */
+  /** A small split-step hop, keyed to the opponent's actual hand deadline. */
   splitStep(time: number, opponentContact: number, nextContact: number) {
     if (opponentContact === this.splitSeen) return;
     this.splitSeen = opponentContact;
     // Leave room to land before preparing another stroke. In dense streams,
     // a quiet base matters more than repeating a hop on every opponent ball.
     if (this.held || opponentContact < time + 0.025 || opponentContact > time + 0.32
-      || opponentContact - this.contactAt < 0.32 || nextContact - opponentContact < 0.36
+      || opponentContact - this.contactAt < 0.32 || nextContact - opponentContact < 0.76
       || this.left.phase < 1 || this.right.phase < 1 || Math.abs(this.x.velocity) > 0.65
+      || Math.abs(this.strain.value) > 0.12 || this.stanceY !== 0
       || time < this.splitContact + 0.5 || this.mode === 'miss') return;
     this.splitContact = opponentContact;
     this.splitStart = Math.max(time, opponentContact - 0.12);
@@ -211,22 +217,25 @@ class Body {
     const release = npc ? 0 : Math.sin(Math.PI * clamp((time - this.releaseAt) / 0.3, 0, 1)) ** 2;
     const rest = npc ? 0 : this.idleWeight.update(idle ? 1 : 0, 5, dt);
     const sway = rest * Math.sin(this.ambientTime * 0.72);
-    let split = 0, heel = 0;
-    if (!npc && time >= this.splitStart && time < this.splitContact + 0.22) {
+    let split = 0, heel = 0, hop = 0;
+    if (!npc && time >= this.splitStart && time < this.splitContact + 0.46) {
       const since = time - this.splitContact;
-      if (since < -0.025) split = -0.025 * smooth((time - this.splitStart) / (this.splitContact - 0.025 - this.splitStart));
-      else if (since < 0.025) split = -0.025 + 0.063 * smooth((since + 0.025) / 0.05);
-      else if (since < 0.085) split = 0.038 - 0.073 * smooth((since - 0.025) / 0.06);
-      else split = -0.035 * (1 - smooth((since - 0.085) / 0.135));
-      // Unweight through the ankles, with toes on the ground: no floating feet.
-      heel = 0.025 * Math.sin(Math.PI * clamp((since + 0.025) / 0.11, 0, 1)) ** 2;
+      if (since < -0.025) split = -0.10 * smooth((time - this.splitStart) / (this.splitContact - 0.025 - this.splitStart));
+      else if (since < 0.11) split = -0.10 + 0.17 * smooth((since + 0.025) / 0.135);
+      else if (since < 0.22) split = 0.07 * (1 - smooth((since - 0.11) / 0.11));
+      else if (since < 0.28) split = -0.11 * smooth((since - 0.22) / 0.06);
+      else split = -0.11 * (1 - smooth((since - 0.28) / 0.18));
+      // Six centimetres of clearance over 220 ms, then a deeper knee bend.
+      // The longer compression reads at native resolution without a tall bounce.
+      hop = 0.06 * Math.sin(Math.PI * clamp(since / 0.22, 0, 1)) ** 2;
+      heel = 0.018 * Math.sin(Math.PI * clamp((since + 0.025) / 0.26, 0, 1)) ** 2;
     }
     this.x.update(targetX + (idle ? Math.sin(this.ambientTime * 0.47) * (npc ? 0.002 : 0.012) : 0), npc ? 11 : 14, dt);
     const vx = this.x.velocity;
     const stroke = this.mode === 'contact' || this.mode === 'follow';
     const strokeTiming = stroke ? this.timing : 0;
     // The weight shift outlasts the swing: it eases off only once the stance is back.
-    const strain = this.strain.update(this.leanGoal * (this.mode === 'recover' ? 0.5 : 1), 10, dt);
+    const strain = this.strain.update(this.leanGoal * (npc && this.mode === 'recover' ? 0.5 : 1), 10, dt);
     const reaching = Math.max(0, -strain), jammed = Math.max(0, strain);
     const turn = this.mode === 'wind' ? -0.25 : stroke ? 0.23 * (1 - 0.45 * jammed) : this.mode === 'hold' ? 0.08 : this.mode === 'wait' ? -0.06 : 0;
     this.twist.update(turn * this.strokeSide + clamp(-vx * f * 0.06, -0.1, 0.1), 20, dt);
@@ -252,7 +261,8 @@ class Body {
     const hurry = npc ? 0 : smooth((Math.max(Math.abs(this.x.value - 0.09 - this.left.x),
       Math.abs(this.x.value + 0.09 - this.right.x)) - 0.26) / 0.20);
     const stepDuration = npc ? 0.19 : 0.155 - hurry * 0.08;
-    this.left.update(dt, stepDuration); this.right.update(dt, stepDuration);
+    this.left.update(dt, stepDuration);
+    this.right.update(dt, !npc && this.right.from === this.right.goal && this.right.fromY !== this.right.goalY ? 0.22 : stepDuration);
     if (this.left.phase === 1 && this.right.phase === 1 && heel === 0) {
       const desired = this.x.value + clamp(vx * 0.10, -0.13, 0.13);
       const l = desired - f * 0.23, r = desired + f * 0.23;
@@ -267,8 +277,21 @@ class Body {
         this.right.step(this.right.x, this.stanceY);
       }
     }
-    const pelvisZ = (npc ? 0.87 : 0.79) + breath - this.load.value - this.slump.value * 0.025 - 0.05 * reaching - 0.02 * jammed + split + rest * 0.018;
-    const pelvisY = this.feetY + f * (0.065 + this.load.value + 0.10 * reaching - 0.07 * jammed + hold * 0.025 + release * 0.045);
+    let pelvisZ = (npc ? 0.87 : 0.79) + breath - this.load.value - this.slump.value * 0.025
+      - 0.05 * reaching - (npc ? 0.02 : 0.065) * jammed + split + rest * 0.018 - hold * 0.09 + release * 0.085;
+    const pelvisY = this.feetY + f * (0.065 + this.load.value + (npc ? 0.10 : 0.24) * reaching
+      - (npc ? 0.07 : 0.20) * jammed - hold * 0.075 + release * 0.09);
+    if (!npc && reaching + jammed > 0.001) {
+      // A long step can coincide with a wide chase. Sink into the stance only
+      // as far as needed to keep the planted trailing leg within its 86 cm reach.
+      for (let side = 0; side < 2; side++) {
+        const foot = side === 0 ? this.left : this.right, sign = side === 0 ? -1 : 1;
+        const dx = this.x.value + sign * 0.09 - foot.x;
+        const dy = pelvisY - (this.feetY - sign * 0.065 + foot.y);
+        const height = Math.sqrt(Math.max(0, 0.859 * 0.859 - dx * dx - dy * dy));
+        pelvisZ = Math.min(pelvisZ, 0.075 + foot.lift + heel + hop + height);
+      }
+    }
     set(j.pelvis, this.x.value, pelvisY, pelvisZ);
     const hipTurn = -this.twist.value * 0.25;
     set(this.pose.forward, Math.sin(hipTurn) * f, Math.cos(hipTurn) * f, 0);
@@ -276,10 +299,10 @@ class Body {
     set(this.pose.chestForward, turnX, turnY, 0);
     set(j.hipL, this.x.value - f * 0.09, pelvisY, pelvisZ);
     set(j.hipR, this.x.value + f * 0.09, pelvisY, pelvisZ);
-    set(j.ankleL, this.left.x, this.feetY + f * 0.065 + this.left.y, 0.075 + this.left.lift + heel);
-    set(j.ankleR, this.right.x, this.feetY - f * 0.065 + this.right.y, 0.075 + this.right.lift + heel);
-    set(j.toeL, this.left.x - f * 0.025, j.ankleL[1] + f * 0.16, 0.025 + this.left.lift);
-    set(j.toeR, this.right.x + f * 0.025, j.ankleR[1] + f * 0.16, 0.025 + this.right.lift);
+    set(j.ankleL, this.left.x, this.feetY + f * 0.065 + this.left.y, 0.075 + this.left.lift + heel + hop);
+    set(j.ankleR, this.right.x, this.feetY - f * 0.065 + this.right.y, 0.075 + this.right.lift + heel + hop);
+    set(j.toeL, this.left.x - f * 0.025, j.ankleL[1] + f * 0.16, 0.025 + this.left.lift + hop);
+    set(j.toeR, this.right.x + f * 0.025, j.ankleR[1] + f * 0.16, 0.025 + this.right.lift + hop);
     solveTwoBone(j.hipL, j.ankleL, j.kneeL, 0.43, 0.43, -f * 0.12, f, 0);
     solveTwoBone(j.hipR, j.ankleR, j.kneeR, 0.43, 0.43, f * 0.12, f, 0);
 
@@ -287,7 +310,8 @@ class Body {
     // A small waist lean gives the striking shoulder room for wide backhands;
     // it is continuous because it follows the C1 hand trajectory.
     const reachSide = clamp((p[0] - this.x.value - f * 0.2) * 0.38, -0.20, 0.20);
-    const shoulderY = pelvisY + f * ((npc ? 0.16 : 0.23) + 0.10 * reaching - 0.08 * jammed);
+    // Fore/aft lean remains visible while a sideways chase owns the feet.
+    const shoulderY = pelvisY + f * ((npc ? 0.16 : 0.23) + (npc ? 0.10 : 0.16) * reaching - (npc ? 0.08 : 0.14) * jammed);
     const shoulderZ = pelvisZ + 0.45 - this.slump.value * 0.045 - 0.03 * reaching - 0.03 * jammed;
     let shoulderX = this.x.value + reachSide + sway * 0.035;
     // Reach from the torso, never stretch an arm. Smooth radial compensation
@@ -312,7 +336,7 @@ class Body {
 
     // Treat forearm + grip + blade as one collinear IK link: the paddle centre
     // is the end effector, so its target is exact without a fake detached bat.
-    solveTwoBone(j.shoulderR, p, j.elbowR, 0.30, 0.43, f * 0.45, -f * 0.08, -1);
+    solveTwoBone(j.shoulderR, p, j.elbowR, 0.30, 0.43, f * (0.45 + (npc ? 0 : jammed * 0.65)), -f * 0.08, -1);
     const up = this.pose.paddle.up;
     const length = Math.hypot(p[0] - j.elbowR[0], p[1] - j.elbowR[1], p[2] - j.elbowR[2]) || 1;
     set(up, (p[0] - j.elbowR[0]) / length, (p[1] - j.elbowR[1]) / length, (p[2] - j.elbowR[2]) / length);
@@ -334,12 +358,21 @@ class Body {
     } else {
       // Let the off hand open against the stroke, then fold back in. Its
       // delayed response breaks the rigid "both elbows up" silhouette.
-      const counter = this.armSwing.update(stroke ? this.strokeSide : this.mode === 'wind' ? -this.strokeSide * 0.45 : 0, 11, dt);
-      this.balance.plan(time, 0.18, shoulderX - (0.29 + clamp(vx * 0.04, -0.065, 0.065)) - counter * 0.045,
-        sy + 0.21 - counter * 0.09 + hold * 0.055 - rest * 0.045,
-        1.06 + counter * 0.055 + hold * 0.035 - this.slump.value * 0.10 - rest * 0.09 + split * 0.5 + sway * 0.02);
+      const counterStroke = stroke || this.mode === 'recover' && time < this.contactAt + 0.26;
+      const counter = this.armSwing.update(counterStroke ? this.strokeSide : this.mode === 'wind' ? -this.strokeSide * 0.45 : 0, 11, dt);
+      this.balance.plan(time, 0.18, shoulderX - (0.29 + clamp(vx * 0.04, -0.065, 0.065)) - counter * 0.18,
+        sy + 0.21 - counter * 0.16 + hold * 0.055 - rest * 0.045,
+        1.06 + counter * 0.10 + hold * 0.035 - this.slump.value * 0.10 - rest * 0.09 + split * 0.5 + sway * 0.02);
     }
     set(j.wristL, this.balance.position[0], this.balance.position[1], this.balance.position[2]);
+    if (!npc) {
+      // A delayed counter-swing can lag behind a fast sideways chase. Keep the
+      // free hand inside a real arm's reach instead of stretching the forearm.
+      const dx = j.wristL[0] - j.shoulderL[0], dy = j.wristL[1] - j.shoulderL[1], dz = j.wristL[2] - j.shoulderL[2];
+      const reach = Math.hypot(dx, dy, dz) || 1;
+      const scale = Math.min(1, 0.56 / reach);
+      set(j.wristL, j.shoulderL[0] + dx * scale, j.shoulderL[1] + dy * scale, j.shoulderL[2] + dz * scale);
+    }
     solveTwoBone(j.shoulderL, j.wristL, j.elbowL, 0.30, 0.27, -f * 0.35, -f * 0.08, -1);
     const ll = Math.hypot(j.wristL[0] - j.elbowL[0], j.wristL[1] - j.elbowL[1], j.wristL[2] - j.elbowL[2]) || 1;
     set(j.handL, j.wristL[0] + (j.wristL[0] - j.elbowL[0]) / ll * 0.08,
