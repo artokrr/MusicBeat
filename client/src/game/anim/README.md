@@ -48,12 +48,20 @@ right of its paddle. Returns reach **x = 0**, regardless of `startX`.
 
 Known incoming notes are anticipated to meet their scheduled beat exactly.
 FrameState contains no future serve before it launches, and no future keypress.
-A newly revealed serve or unexpected input therefore gets a **65 ms continuous
-reaction stroke**, not an instantaneous pose jump. Early/late presses can differ
-from the scheduled contact; the exact-contact guarantee and sheet assertions
-are for on-beat input. Supporting arbitrary exact press-time/serve-time contact
-without discontinuity requires upstream pre-serve information or visual ball
-retiming, neither of which this animation-only change alters. Overlapping
+A newly revealed serve or an input with no ball gets a **65 ms continuous
+reaction stroke**, not an instantaneous pose jump.
+
+A pressed ball is met where it really is (`strike`). The paddle reaches the
+ball's path 16-70 ms after the press (no faster than 7 m/s from where the hand
+is), and the renderer keeps the ball coming until then and sends it back from
+that point (`strikeFor`). The hit flash waits for the same moment. The press's
+timing shapes the stroke: on the beat it is the usual drive; early, the ball is
+still out over the table and the stroke is a reaching poke with the body leaning
+in; late, the ball has passed the hit line and dropped, so the stroke is a
+cramped upward flick with the body leaning back. "ok" presses also cost a little
+balance. If the beat arrives with no press, the swing checks (`wait`) and the
+ball runs on, slowing to rest 30 cm past the hit line (`flight.ts`), which is
+where a missed ball's fall starts. Overlapping
 opponent serves/returns are performed in deadline order; coincident balls at
 different positions cannot all physically touch one paddle at the same instant.
 

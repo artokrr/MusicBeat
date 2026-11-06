@@ -105,6 +105,8 @@ interface ActiveNote extends BeatNote {
   // Return trajectory
   returnStartX?: number;
   returnStartY?: number;
+  /** Song time of the press that returned this ball. */
+  hitTime?: number;
 
   // For missed ball physics
   missTime?: number;
@@ -232,6 +234,7 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
       // Normal/Strong notes: instant hit
       note.hit = true;
       note.hitResult = result;
+      note.hitTime = currentTime;
 
       if (result !== 'miss') {
         note.returnPhase = true;

@@ -2,6 +2,7 @@
 // borrowed-output lifetime, contact timing and FrameState visibility limits.
 import { JOINT_NAMES } from '../rig/joints';
 import { clamp, set, smooth, solveTwoBone, Spring, Trajectory } from './motion';
+import { incomingBall } from './flight';
 
 import type { JointPose, JointName, Vec3 } from '../rig/joints';
 import type { FrameState, NoteView } from '../pixel/renderer';
@@ -21,18 +22,21 @@ function makePose(): JointPose {
 
 class Foot {
   x = 0; from = 0; goal = 0; phase = 1; lift = 0;
-  step(x: number) { this.from = this.x; this.goal = x; this.phase = 0; }
+  /** Forward (+) or back (-) of the stance line, for lunges and step-backs. */
+  y = 0; fromY = 0; goalY = 0;
+  step(x: number, y = this.goalY) { this.from = this.x; this.goal = x; this.fromY = this.y; this.goalY = y; this.phase = 0; }
   update(dt: number, duration: number) {
     this.phase = Math.min(1, this.phase + dt / duration);
     const t = this.phase;
     // Zero vertical and horizontal speed at takeoff/landing: no heel popping.
     const ease = t * t * t * (10 + t * (-15 + 6 * t));
     this.x = this.from + (this.goal - this.from) * ease;
+    this.y = this.fromY + (this.goalY - this.fromY) * ease;
     this.lift = 0.055 * Math.sin(Math.PI * t) ** 2;
   }
 }
 
-type StrokeMode = 'ready' | 'wind' | 'contact' | 'follow' | 'recover' | 'hold' | 'miss';
+type StrokeMode = 'ready' | 'wind' | 'contact' | 'wait' | 'follow' | 'recover' | 'hold' | 'miss';
 
 class Body {
   readonly pose = makePose();
@@ -40,6 +44,9 @@ class Body {
   readonly twist = new Spring();
   readonly load = new Spring();
   readonly slump = new Spring();
+  /** Lean from the last stroke's timing: + jammed by a late ball, - reaching for an early one. */
+  readonly strain = new Spring();
+  leanGoal = 0;
   readonly gazeX = new Spring();
   readonly gazeZ = new Spring(1.05);
   readonly clothX = new Spring();
@@ -51,7 +58,12 @@ class Body {
   mode: StrokeMode = 'ready';
   eventTime = -Infinity;
   eventX = 0;
+  eventY: number;
   eventZ: number = CONTACT.hitZ;
+  /** Timing of the stroke in play: 0 on the beat, up to +1 late, down to -1 early. */
+  timing = 0;
+  /** The player's predicted stroke has met a pressed ball (rather than only its beat). */
+  struck = false;
   contactAt = -Infinity;
   strokeSide = 1;
   held = false;
@@ -61,6 +73,7 @@ class Body {
   readyX = 0; readyY = 0; readyZ = 1.08;
   constructor(readonly facing: 1 | -1, readonly feetY: number, x: number) {
     this.x = new Spring(x); this.lastBodyY = feetY;
+    this.eventY = this.hitY;
     this.left.x = this.left.from = this.left.goal = x - facing * 0.23;
     this.right.x = this.right.from = this.right.goal = x + facing * 0.23;
     this.readyX = x + facing * 0.34; this.readyY = feetY + facing * 0.48;
@@ -69,7 +82,9 @@ class Body {
   }
   get hitY() { return this.facing === 1 ? CONTACT.playerY : CONTACT.strangerY; }
   prepare(time: number, at: number, x: number, z: number, id: number, toss = false) {
-    this.eventTime = id; this.contactAt = at; this.eventX = x; this.eventZ = z;
+    this.eventTime = id; this.contactAt = at; this.eventX = x; this.eventY = this.hitY; this.eventZ = z;
+    this.timing = 0; this.struck = false; this.leanGoal = 0;
+    this.settleFeet();
     this.strokeSide = (x - this.x.value) * this.facing < 0.04 ? -1 : 1;
     if (toss) this.tossUntil = at + 0.09;
     const lead = at - time;
@@ -86,17 +101,51 @@ class Body {
   contact(time: number) {
     this.mode = 'contact';
     const soft = this.eventZ === CONTACT.holdZ;
-    this.hand.plan(time, this.contactAt - time, this.eventX, this.hitY, this.eventZ,
+    this.hand.plan(time, this.contactAt - time, this.eventX, this.eventY, this.eventZ,
       soft ? 0 : -this.facing * this.strokeSide * 0.24, soft ? 0 : this.facing * 0.85, soft ? 0 : 0.12);
+  }
+  /**
+   * Meet a pressed ball where it really is at `at`. On the beat this is the
+   * usual drive. Early, the ball is still out over the table: a reaching poke
+   * with little follow-through. Late, it has passed the hit line and dropped:
+   * a jammed, cramped flick upward from close to the body.
+   */
+  strike(time: number, at: number, x: number, y: number, z: number, timing: number) {
+    if (Math.abs(x - this.eventX) > 0.035) this.strokeSide = (x - this.x.value) * this.facing < 0.04 ? -1 : 1;
+    this.mode = 'contact'; this.struck = true; this.timing = timing; this.leanGoal = timing;
+    // The striking-side foot lunges toward an early ball or steps back from a late one.
+    if (timing !== 0) {
+      const foot = this.facing === 1 ? this.right : this.left;
+      foot.step(foot.goal, this.facing * (timing < 0 ? -0.24 * timing : -0.2 * timing));
+    }
+    this.eventX = x; this.eventY = y; this.eventZ = z;
+    const f = this.facing, early = Math.max(0, -timing), late = Math.max(0, timing);
+    this.hand.plan(time, at - time, x, y, z,
+      -f * this.strokeSide * 0.24 * (1 - 0.5 * (early + late)), f * (0.85 - 0.45 * early - 0.4 * late), 0.12 + 0.55 * late);
+    this.contactAt = this.hand.end;
   }
   follow(time: number, push = false) {
     this.mode = 'follow';
-    this.hand.plan(time, push ? 0.12 : 0.095, this.eventX - this.facing * this.strokeSide * (push ? 0.025 : 0.09),
-      this.hitY + this.facing * (push ? 0.09 : 0.095), this.eventZ + (push ? 0.02 : 0.065));
+    const f = this.facing, early = push ? 0 : Math.max(0, -this.timing), late = push ? 0 : Math.max(0, this.timing);
+    const reach = push ? 0.025 : 0.09 * (1 - 0.6 * early - 0.3 * late);
+    const forward = push ? 0.09 : 0.095 * (1 - 0.5 * early - 0.45 * late);
+    const lift = push ? 0.02 : 0.065 - 0.03 * early + 0.11 * late;
+    this.hand.plan(time, (push ? 0.12 : 0.095) + 0.03 * (early + late), this.eventX - f * this.strokeSide * reach,
+      this.eventY + f * forward, this.eventZ + lift);
+  }
+  /** The beat arrived without a press: check the swing and let the ball come on. */
+  wait(time: number) {
+    this.mode = 'wait';
+    this.hand.plan(time, 0.16, this.eventX - this.facing * this.strokeSide * 0.02, this.eventY - this.facing * 0.1, this.eventZ - 0.05);
+  }
+  settleFeet() {
+    for (const foot of [this.left, this.right]) if (foot.goalY !== 0) foot.step(foot.goal, 0);
   }
   recover(time: number) {
     this.mode = 'recover';
-    this.hand.plan(time, 0.28, this.readyX, this.readyY, this.readyZ);
+    this.settleFeet();
+    this.hand.plan(time, 0.28 + 0.1 * Math.abs(this.timing), this.readyX, this.readyY, this.readyZ);
+    this.timing = 0;
   }
   advance(time: number) {
     // Preserve the exact segment boundary even if a frame straddles contact.
@@ -106,9 +155,11 @@ class Body {
       if (this.mode === 'wind') this.contact(end);
       else if (this.mode === 'contact') {
         if (this.held) { this.mode = 'hold'; set(this.hand.velocity, 0, 0, 0); break; }
-        this.follow(end);
-      } else if (this.mode === 'follow' || this.mode === 'miss') this.recover(end);
-      else if (this.mode === 'recover') { this.mode = 'ready'; break; }
+        // Only the player can be late; the stranger's beat is its contact.
+        if (this.facing === 1 && !this.struck) this.wait(end);
+        else this.follow(end);
+      } else if (this.mode === 'follow' || this.mode === 'miss' || this.mode === 'wait') this.recover(end);
+      else if (this.mode === 'recover') { this.mode = 'ready'; this.leanGoal = 0; break; }
       else break;
     }
     this.hand.sample(time);
@@ -127,10 +178,15 @@ class Body {
     this.x.update(targetX + (idle ? Math.sin(this.ambientTime * 0.47) * (npc ? 0.002 : 0.012) : 0), npc ? 11 : 14, dt);
     const vx = this.x.velocity;
     const stroke = this.mode === 'contact' || this.mode === 'follow';
-    const turn = this.mode === 'wind' ? -0.25 : stroke ? 0.23 : this.mode === 'hold' ? 0.08 : 0;
+    const strokeTiming = stroke ? this.timing : 0;
+    // The weight shift outlasts the swing: it eases off only once the stance is back.
+    const strain = this.strain.update(this.leanGoal * (this.mode === 'recover' ? 0.5 : 1), 10, dt);
+    const reaching = Math.max(0, -strain), jammed = Math.max(0, strain);
+    const turn = this.mode === 'wind' ? -0.25 : stroke ? 0.23 * (1 - 0.45 * jammed) : this.mode === 'hold' ? 0.08 : this.mode === 'wait' ? -0.06 : 0;
     this.twist.update(turn * this.strokeSide + clamp(-vx * f * 0.06, -0.1, 0.1), 20, dt);
     this.load.update(stroke ? 0.018 : this.mode === 'wind' ? -0.012 : 0, 16, dt);
-    this.slump.update(this.mode === 'miss' ? 1 : 0, 9, dt);
+    // A stroke at the edge of the window ("ok") also costs a little balance.
+    this.slump.update(this.mode === 'miss' ? 1 : Math.max(0, Math.abs(strokeTiming) - 0.7), 9, dt);
     this.readyX = this.x.value + f * 0.34;
     this.readyY = this.feetY + f * 0.48;
     this.readyZ = 1.08 + breath;
@@ -151,8 +207,8 @@ class Body {
         foot.step(foot === this.left ? l : r);
       }
     }
-    const pelvisZ = (npc ? 0.87 : 0.79) + breath - this.load.value - this.slump.value * 0.025;
-    const pelvisY = this.feetY + f * (0.065 + this.load.value);
+    const pelvisZ = (npc ? 0.87 : 0.79) + breath - this.load.value - this.slump.value * 0.025 - 0.05 * reaching - 0.02 * jammed;
+    const pelvisY = this.feetY + f * (0.065 + this.load.value + 0.10 * reaching - 0.07 * jammed);
     set(j.pelvis, this.x.value, pelvisY, pelvisZ);
     const hipTurn = -this.twist.value * 0.25;
     set(this.pose.forward, Math.sin(hipTurn) * f, Math.cos(hipTurn) * f, 0);
@@ -160,8 +216,8 @@ class Body {
     set(this.pose.chestForward, turnX, turnY, 0);
     set(j.hipL, this.x.value - f * 0.09, pelvisY, pelvisZ);
     set(j.hipR, this.x.value + f * 0.09, pelvisY, pelvisZ);
-    set(j.ankleL, this.left.x, this.feetY + f * 0.065, 0.075 + this.left.lift);
-    set(j.ankleR, this.right.x, this.feetY - f * 0.065, 0.075 + this.right.lift);
+    set(j.ankleL, this.left.x, this.feetY + f * 0.065 + this.left.y, 0.075 + this.left.lift);
+    set(j.ankleR, this.right.x, this.feetY - f * 0.065 + this.right.y, 0.075 + this.right.lift);
     set(j.toeL, this.left.x - f * 0.025, j.ankleL[1] + f * 0.16, 0.025 + this.left.lift);
     set(j.toeR, this.right.x + f * 0.025, j.ankleR[1] + f * 0.16, 0.025 + this.right.lift);
     solveTwoBone(j.hipL, j.ankleL, j.kneeL, 0.43, 0.43, -f * 0.12, f, 0);
@@ -171,8 +227,8 @@ class Body {
     // A small waist lean gives the striking shoulder room for wide backhands;
     // it is continuous because it follows the C1 hand trajectory.
     const reachSide = clamp((p[0] - this.x.value - f * 0.2) * 0.38, -0.20, 0.20);
-    const shoulderY = pelvisY + f * (npc ? 0.16 : 0.23);
-    const shoulderZ = pelvisZ + 0.45 - this.slump.value * 0.045;
+    const shoulderY = pelvisY + f * ((npc ? 0.16 : 0.23) + 0.10 * reaching - 0.08 * jammed);
+    const shoulderZ = pelvisZ + 0.45 - this.slump.value * 0.045 - 0.03 * reaching - 0.03 * jammed;
     let shoulderX = this.x.value + reachSide;
     // Reach from the torso, never stretch an arm. Smooth radial compensation
     // is normally just a few cm; essential during 8 Hz cross-court streams.
@@ -227,8 +283,12 @@ class Body {
 
 /** Mutated in place each update; copy it if retaining snapshots. No clock/RNG reads. */
 export interface AnimatorOutput { player: JointPose; stranger: JointPose }
+/** Where and when the player's paddle met a pressed ball; the ball leaves from here. */
+export interface Strike { id: number; hitTime: number; at: number; pos: Vec3 }
 export interface Animator {
   update(frame: FrameState): AnimatorOutput;
+  /** The strike for the note with this time, once the player has pressed it. */
+  strikeFor(noteTime: number): Strike | undefined;
   idle(nowMs: number, dt: number): AnimatorOutput;
   reset(): void;
 }
@@ -241,6 +301,13 @@ export function createAnimator(): Animator {
   // their arrival frame, so retain their known deadline rather than polling >.85.
   const events = Array.from({ length: 64 }, () => ({ id: -Infinity, kind: 0, at: 0, x: 0, z: 0, pending: false }));
   let eventCursor = 0;
+  const strikes: Strike[] = Array.from({ length: 16 }, () => ({ id: -Infinity, hitTime: 0, at: 0, pos: [0, 0, 0] }));
+  let strikeCursor = 0;
+  const ball: Vec3 = [0, 0, 0];
+  function strikeFor(noteTime: number) {
+    for (let i = 0; i < strikes.length; i++) if (strikes[i].id === noteTime) return strikes[i];
+    return undefined;
+  }
   function enqueue(id: number, kind: number, at: number, x: number, z: number) {
     for (let i = 0; i < events.length; i++) if (events[i].id === id && events[i].kind === kind) return;
     const e = events[eventCursor]; eventCursor = (eventCursor + 1) % events.length;
@@ -252,6 +319,8 @@ export function createAnimator(): Animator {
     lastSongTime = lastPress = lastMiss = -Infinity; inIdle = true;
     for (const e of events) { e.id = -Infinity; e.pending = false; }
     eventCursor = 0;
+    for (const s of strikes) s.id = -Infinity;
+    strikeCursor = 0;
   }
   function idle(nowMs: number, dt: number) {
     const t = nowMs / 1000, step = clamp(dt, 0, 0.05);
@@ -291,7 +360,29 @@ export function createAnimator(): Animator {
         player.prepare(t, t + 0.065, courtX(held.x), CONTACT.holdZ, held.time);
       }
     } else if (wasHeld) { player.follow(t, true); }
+    // A pressed ball: the paddle meets it where it is a moment after the press,
+    // no faster than a forearm can get there, and the ball leaves from that point.
+    let struck = false;
+    for (let i = 0; i < frame.notes.length; i++) {
+      const n = frame.notes[i];
+      if (!n.returnPhase || n.hitTime === undefined || n.holdStartTime !== undefined || strikeFor(n.time)) continue;
+      const late = n.hitTime - n.time;
+      const grade = n.hitResult === 'perfect' ? 0 : n.hitResult === 'good' ? 0.6 : 1;
+      const hand = player.hand.position;
+      let reach = 0.016;
+      for (let k = 0; k < 2; k++) {
+        incomingBall(n, t + reach, frame.approachTime, ball);
+        reach = clamp(Math.hypot(ball[0] - hand[0], ball[1] - hand[1], ball[2] - hand[2]) / 7, 0.016, 0.07);
+      }
+      incomingBall(n, t + reach, frame.approachTime, ball);
+      player.eventTime = n.time;
+      player.strike(t, t + reach, ball[0], ball[1], ball[2], grade * Math.sign(late));
+      const s = strikes[strikeCursor]; strikeCursor = (strikeCursor + 1) % strikes.length;
+      s.id = n.time; s.hitTime = n.hitTime; s.at = player.contactAt; set(s.pos, ball[0], ball[1], ball[2]);
+      struck = true;
+    }
     const press = frame.nowMs - frame.pressAgeMs;
+    if (struck && Number.isFinite(press)) lastPress = press;
     if (frame.pressedLane !== null && Number.isFinite(press) && press > lastPress + 0.5) {
       lastPress = press;
       const x = courtX(frame.world.lanes[frame.pressedLane]);
@@ -341,5 +432,5 @@ export function createAnimator(): Animator {
     stranger.render(t, dt, npcX + 0.28, gazeX, gazeZ, false);
     return result;
   }
-  return { update, idle, reset };
+  return { update, idle, reset, strikeFor };
 }

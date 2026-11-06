@@ -6,11 +6,12 @@
 // their shadows, then 2D overlays (sparks, judgement text, HUD) on top.
 import type { NoteType } from '../../types/beatmap';
 import type { HitFeedback, HitResult } from '../../types/game';
-import { lerp, type RGB } from './engine3d';
+import { clamp, lerp, type RGB } from './engine3d';
 import { TABLE_HALF_W, TABLE_Z } from './courtyard';
 import { project } from '../scene/camera';
 import { presentScene } from '../scene/backend';
 import { createAnimator } from '../anim/animator';
+import { flightHeight, incomingBall } from '../anim/flight';
 import type { BallView, SceneFrame } from '../scene/types';
 import type { Look } from './figures';
 import { drawText } from './font';
@@ -28,6 +29,8 @@ export interface NoteView {
   returnProgress: number;
   returnStartX?: number;
   returnStartY?: number;
+  /** Song time of the press that returned this ball. */
+  hitTime?: number;
   startX: number;
   targetX: number;
   switchControlX?: number;
@@ -76,21 +79,9 @@ const toX = (x: number) => (x - CENTER) * METRES_PER_UNIT_X;
 const toY = (y: number) => (NET_LINE - y) * METRES_PER_UNIT_Y;
 const PLAYER_HIT_Y = -1.5;
 const NPC_HIT_Y = 1.5;
-/** Where the ball bounces on the receiver's half, as a fraction of the flight. */
-const BOUNCE_AT = 0.7;
 const BALL_R = 0.055;
-function bezier(a: number, b: number, c: number, t: number) {
-  const u = 1 - t;
-  return u * u * a + 2 * u * t * b + t * t * c;
-}
-/** Height above the table top along a rally shot: over the net, one bounce, up to the hitter. */
-function flightHeight(p: number): number {
-  if (p <= BOUNCE_AT)
-    return bezier(0.22, 0.62, 0, p / BOUNCE_AT);
-  if (p <= 1)
-    return bezier(0, 0.42, 0.24, (p - BOUNCE_AT) / (1 - BOUNCE_AT));
-  return 0.24 - (p - 1) * 0.8;
-}
+/** Game.tsx's return flight: returnProgress advances 2.5 per second. */
+const RETURN_SECONDS = 0.4;
 // ---------- Look ----------
 const NOTE_COLORS: Record<NoteType, RGB> = {
   normal: [244, 242, 236],
@@ -163,16 +154,26 @@ function noteToBall(note: NoteView, frame: FrameState, out: BallView): boolean {
     return ballAt(out, toX(note.x), PLAYER_HIT_Y, TABLE_Z + .24, color, 1, note.holdProgress ?? 0);
   }
   if (note.returnPhase) {
+    const strike = animator.strikeFor(note.time);
+    if (strike) {
+      // The ball comes on until the paddle reaches it, then leaves from that point.
+      if (frame.songTime < strike.at) {
+        incomingBall(note, frame.songTime, frame.approachTime, out.pos);
+        return ballAt(out, out.pos[0], out.pos[1], out.pos[2], color);
+      }
+      const start = clamp((strike.at - strike.hitTime) / RETURN_SECONDS, 0, 0.5);
+      const p = clamp((note.returnProgress - start) / (1 - start), 0, 1);
+      const [sx, sy, sz] = strike.pos;
+      const settle = (1 - p) * (1 - p) * (sz - (TABLE_Z + BALL_R + flightHeight(0)));
+      return ballAt(out, lerp(sx, toX(CENTER), p), lerp(sy, NPC_HIT_Y, p), TABLE_Z + BALL_R + flightHeight(p) + settle, color);
+    }
     const p = note.returnProgress;
     const fromX = toX(note.returnStartX ?? note.targetX);
     return ballAt(out, lerp(fromX, toX(CENTER), p), lerp(PLAYER_HIT_Y, NPC_HIT_Y, p), TABLE_Z + BALL_R + flightHeight(p), color);
   }
   if (!note.hit) {
-    const p = Math.max(0, 1 - (note.time - frame.songTime) / frame.approachTime);
-    const x = note.type === 'switch' && note.switchControlX !== undefined
-      ? bezier(note.startX, note.switchControlX, note.targetX, Math.min(p, 1))
-      : note.startX + (note.targetX - note.startX) * Math.min(p, 1);
-    return ballAt(out, toX(x), lerp(NPC_HIT_Y, PLAYER_HIT_Y, p), TABLE_Z + BALL_R + flightHeight(p), color);
+    incomingBall(note, frame.songTime, frame.approachTime, out.pos);
+    return ballAt(out, out.pos[0], out.pos[1], out.pos[2], color);
   }
   return false;
 }
@@ -230,9 +231,42 @@ interface Flash {
 }
 const sparks: Spark[] = [];
 const flashes: Flash[] = [];
+interface PendingBurst {
+  worldX: number;
+  worldY: number;
+  color: string;
+  count: number;
+}
+const pendingBursts: PendingBurst[] = [];
 /** Spawn a burst at a gameplay-space point (same arguments the old particle system took). */
 export function spawnBurst(worldX: number, worldY: number, color: string, count: number) {
-  const p = project([toX(worldX), toY(worldY) < 0 ? PLAYER_HIT_Y : toY(worldY), TABLE_Z + 0.24]);
+  pendingBursts.push({ worldX, worldY, color, count });
+}
+/**
+ * A pressed ball bursts where and when the paddle meets it, which can be a
+ * few frames after the press and away from the hit line. Anything else (a
+ * released hold) bursts at once where the game put it.
+ */
+function releaseBursts(frame: FrameState) {
+  for (let i = pendingBursts.length - 1; i >= 0; i--) {
+    const b = pendingBursts[i]!;
+    let pressed: NoteView | undefined;
+    for (const n of frame.notes)
+      if (n.returnPhase && n.returnStartX === b.worldX && n.hitTime !== undefined && (!pressed || n.hitTime > pressed.hitTime!))
+        pressed = n;
+    const strike = pressed && animator.strikeFor(pressed.time);
+    if (strike) {
+      if (frame.songTime < strike.at)
+        continue;
+      burstAt(strike.pos, b.color, b.count);
+    } else {
+      burstAt([toX(b.worldX), toY(b.worldY) < 0 ? PLAYER_HIT_Y : toY(b.worldY), TABLE_Z + 0.24], b.color, b.count);
+    }
+    pendingBursts.splice(i, 1);
+  }
+}
+function burstAt(pos: [number, number, number], color: string, count: number) {
+  const p = project(pos);
   const x = Math.round(p.sx);
   const y = Math.round(p.sy);
   flashes.push({ x, y, bornMs: performance.now(), color });
@@ -343,6 +377,7 @@ function drawCountdown(ctx: CanvasRenderingContext2D, value: number) {
 export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
   const description = describeFrame(frame);
   const backend = presentScene(ctx, description);
+  releaseBursts(frame);
   for (let i = 0; i < description.ballCount; i++) {
     const ball = description.balls[i];
     if (ball.holdProgress < 0)
