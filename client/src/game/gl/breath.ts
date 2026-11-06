@@ -17,7 +17,6 @@ export class Breath {
   private cursor = 0;
   private sequence = 0;
   private nextPlayer = -Infinity;
-  private nextStranger = -Infinity;
   private lastStroke = -Infinity;
   private pendingStroke = Infinity;
   private lastTime = -Infinity;
@@ -79,7 +78,7 @@ export class Breath {
     if (!Number.isFinite(this.lastTime) || t < this.lastTime) {
       this.life.array.fill(0); this.life.needsUpdate = true;
       this.cursor = this.sequence = 0;
-      this.nextPlayer = t + .6; this.nextStranger = t + 1.6;
+      this.nextPlayer = t + .6;
       this.lastStroke = -Infinity; this.pendingStroke = Infinity;
     }
     this.lastTime = t;
@@ -98,11 +97,8 @@ export class Breath {
         this.nextPlayer = t + 2.6 + seed(this.sequence) * .9;
       }
     }
-    if (!frame.stranger.visible) this.nextStranger = t + 1.6;
-    else if (t >= this.nextStranger) {
-      this.emit(frame.stranger.pose, t, true, false);
-      this.nextStranger = t + 3.6 + seed(this.sequence) * .4;
-    }
+    // The stranger shows no breath. Its faint puffs, dithered against the
+    // black hood, read as one or two glowing eyes; the face must stay empty.
   }
   dispose() { this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
 }
