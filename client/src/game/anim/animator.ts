@@ -2,7 +2,8 @@
 // borrowed-output lifetime, contact timing and FrameState visibility limits.
 import { JOINT_NAMES } from '../rig/joints';
 import { clamp, set, smooth, solveTwoBone, Spring, Trajectory } from './motion';
-import { incomingBall } from './flight';
+import { incomingBall, BASKET, FEED_LEAD, RALLY_MIN_RETURN, RALLY_MAX_RETURN, DRILL_RETURN_SECONDS } from './flight';
+import type { ReturnFlight } from './flight';
 
 import type { JointPose, JointName, Vec3 } from '../rig/joints';
 import type { FrameState, NoteView } from '../pixel/renderer';
@@ -10,7 +11,6 @@ import type { FrameState, NoteView } from '../pixel/renderer';
 // Keep these in step with pixel/renderer.ts's gameplay-to-courtyard mapping.
 export const CONTACT = { playerY: -1.5, strangerY: 1.5, hitZ: 1.055, serveZ: 1.035, holdZ: 1.0 } as const;
 export const courtX = (x: number) => (x - 400) * (0.45 / 80);
-const RETURN_SECONDS = 0.4;
 
 function makePose(): JointPose {
   const joints = {} as Record<JointName, Vec3>;
@@ -281,6 +281,72 @@ class Body {
   }
 }
 
+/** Stranger-only feed motion; keep the player's Body and stroke code independent. */
+class Stranger extends Body {
+  private readonly freeHand = new Trajectory();
+  private readonly feedPosition: Vec3 = [0, 0, 0];
+  private readonly release: Vec3 = [0, 0, 0];
+  private readonly handTip: Vec3 = [0, 0, 0];
+  feedAt = -Infinity;
+  private pickupAt = -Infinity;
+  private releaseAt = -Infinity;
+  private feedX = 0;
+  private feedStage = 0;
+  constructor() {
+    super(-1, 2.05, 0.28);
+    this.freeHand.reset(BASKET[0], BASKET[1], BASKET[2]);
+  }
+  feed(time: number, at: number, x: number) {
+    this.feedAt = at; this.feedX = x;
+    this.pickupAt = Math.max(time + 0.025, at - 0.19);
+    this.releaseAt = at - 0.075;
+    this.feedStage = 1;
+    this.freeHand.plan(time, this.pickupAt - time, BASKET[0], BASKET[1], BASKET[2]);
+  }
+  override render(time: number, dt: number, targetX: number, gazeX: number, gazeZ: number, idle: boolean) {
+    super.render(time, dt, targetX, gazeX, gazeZ, idle);
+    // Reach into the basket, bring one ball in front, release into a compact drive.
+    for (let i = 0; i < 3 && time >= this.freeHand.end; i++) {
+      const end = this.freeHand.end;
+      this.freeHand.sample(end);
+      if (this.feedStage === 1) {
+        this.feedStage = 2;
+        this.freeHand.plan(end, this.releaseAt - end, Math.max(0.22, this.feedX + 0.22), 1.62, 1.12);
+      } else if (this.feedStage === 2) {
+        this.feedStage = 3;
+        const p = this.freeHand.position;
+        set(this.release, p[0], p[1], p[2]);
+        this.freeHand.plan(end, 0.19, BASKET[0], BASKET[1], BASKET[2] + 0.06);
+      } else { this.feedStage = 0; break; }
+    }
+    this.freeHand.sample(time);
+    const j = this.pose.joints, wanted = this.freeHand.position, p = this.handTip;
+    const dx = wanted[0] - j.shoulderL[0], dy = wanted[1] - j.shoulderL[1], dz = wanted[2] - j.shoulderL[2];
+    const reach = Math.min(1, 0.645 / (Math.hypot(dx, dy, dz) || 1));
+    set(p, j.shoulderL[0] + dx * reach, j.shoulderL[1] + dy * reach, j.shoulderL[2] + dz * reach);
+    // The free-hand tip is the ball carrier, with a continuous forearm/grip line.
+    solveTwoBone(j.shoulderL, p, j.elbowL, 0.30, 0.35, 0.35, 0.08, -1);
+    const len = Math.hypot(p[0] - j.elbowL[0], p[1] - j.elbowL[1], p[2] - j.elbowL[2]) || 1;
+    set(j.wristL, p[0] - (p[0] - j.elbowL[0]) / len * 0.08,
+      p[1] - (p[1] - j.elbowL[1]) / len * 0.08, p[2] - (p[2] - j.elbowL[2]) / len * 0.08);
+    set(j.handL, p[0], p[1], p[2]);
+  }
+  ball(time: number): Vec3 | undefined {
+    if (time < this.pickupAt || time >= this.feedAt) return undefined;
+    const p = this.feedPosition;
+    if (time < this.releaseAt) {
+      const hand = this.handTip;
+      set(p, hand[0], hand[1], hand[2]);
+    } else {
+      const q = clamp((time - this.releaseAt) / (this.feedAt - this.releaseAt), 0, 1);
+      set(p, this.release[0] + (this.feedX - this.release[0]) * q,
+        this.release[1] + (CONTACT.strangerY - this.release[1]) * q,
+        this.release[2] + (CONTACT.serveZ - this.release[2]) * q + 0.04 * Math.sin(Math.PI * q));
+    }
+    return p;
+  }
+}
+
 /** Mutated in place each update; copy it if retaining snapshots. No clock/RNG reads. */
 export interface AnimatorOutput { player: JointPose; stranger: JointPose }
 /** Where and when the player's paddle met a pressed ball; the ball leaves from here. */
@@ -289,21 +355,36 @@ export interface Animator {
   update(frame: FrameState): AnimatorOutput;
   /** The strike for the note with this time, once the player has pressed it. */
   strikeFor(noteTime: number): Strike | undefined;
+  returnFor(noteTime: number): ReturnFlight | undefined;
+  feedBall(): Vec3 | undefined;
   idle(nowMs: number, dt: number): AnimatorOutput;
   reset(): void;
 }
 
 export function createAnimator(): Animator {
-  let player = new Body(1, -2.3, -0.3), stranger = new Body(-1, 2.05, 0.28);
+  let player = new Body(1, -2.3, -0.3), stranger = new Stranger();
   const result: AnimatorOutput = { player: player.pose, stranger: stranger.pose };
   let lastSongTime = -Infinity, lastPress = -Infinity, lastMiss = -Infinity, inIdle = true;
   // Fixed queue doubles as recent-event history; returned notes disappear before
   // their arrival frame, so retain their known deadline rather than polling >.85.
   const events = Array.from({ length: 64 }, () => ({ id: -Infinity, kind: 0, at: 0, x: 0, z: 0, pending: false }));
   let eventCursor = 0;
-  const strikes: Strike[] = Array.from({ length: 16 }, () => ({ id: -Infinity, hitTime: 0, at: 0, pos: [0, 0, 0] }));
+  // Disposal stays visible longer than a stroke; keep contact history through dense feeds.
+  const strikes: Strike[] = Array.from({ length: 64 }, () => ({ id: -Infinity, hitTime: 0, at: 0, pos: [0, 0, 0] }));
   let strikeCursor = 0;
   const ball: Vec3 = [0, 0, 0];
+  const returns: ReturnFlight[] = Array.from({ length: 64 }, () => ({
+    id: -Infinity, startAt: 0, endAt: 0, rallyTime: Infinity, endX: 0, from: [0, 0, 0],
+  }));
+  let returnCursor = 0;
+  function returnFor(noteTime: number) {
+    for (let i = 0; i < returns.length; i++) if (returns[i].id === noteTime) return returns[i];
+    return undefined;
+  }
+  function rallyInto(noteTime: number) {
+    for (let i = 0; i < returns.length; i++) if (returns[i].rallyTime === noteTime) return true;
+    return false;
+  }
   function strikeFor(noteTime: number) {
     for (let i = 0; i < strikes.length; i++) if (strikes[i].id === noteTime) return strikes[i];
     return undefined;
@@ -314,13 +395,14 @@ export function createAnimator(): Animator {
     e.id = id; e.kind = kind; e.at = at; e.x = x; e.z = z; e.pending = true;
   }
   function reset() {
-    player = new Body(1, -2.3, -0.3); stranger = new Body(-1, 2.05, 0.28);
+    player = new Body(1, -2.3, -0.3); stranger = new Stranger();
     result.player = player.pose; result.stranger = stranger.pose;
     lastSongTime = lastPress = lastMiss = -Infinity; inIdle = true;
     for (const e of events) { e.id = -Infinity; e.pending = false; }
     eventCursor = 0;
     for (const s of strikes) s.id = -Infinity;
-    strikeCursor = 0;
+    strikeCursor = returnCursor = 0;
+    for (const r of returns) { r.id = -Infinity; r.rallyTime = Infinity; }
   }
   function idle(nowMs: number, dt: number) {
     const t = nowMs / 1000, step = clamp(dt, 0, 0.05);
@@ -346,10 +428,8 @@ export function createAnimator(): Animator {
         if (!look || n.time < look.time) look = n;
         if (n.type === 'hold' && n.holdStartTime !== undefined) held = n;
         else if (n.time >= t - 0.025 && (!next || n.time < next.time)) next = n;
-        const spawn = n.time - frame.approachTime;
-        if (spawn >= t - 0.12) enqueue(n.time, 0, Math.max(spawn, t + 0.065), courtX(n.startX), CONTACT.serveZ);
+
       }
-      if (n.returnPhase) enqueue(n.time, 1, t + (1 - n.returnProgress) * RETURN_SECONDS, 0, CONTACT.hitZ);
       if (n.hitResult === 'miss' && n.missTime !== undefined && n.missTime > lastMiss && (!missed || n.missTime > missed.missTime!)) missed = n;
     }
     const wasHeld = player.held;
@@ -403,14 +483,45 @@ export function createAnimator(): Animator {
         player.hand.plan(t, 0.19, courtX(missed.targetX), CONTACT.playerY - 0.13, 0.86);
       }
     }
+    // Decide only after the player's strike is known. A miss never creates a
+    // return, so the next note automatically remains a fresh basket feed.
+    for (let i = 0; i < frame.notes.length; i++) {
+      const n = frame.notes[i];
+      if (!n.returnPhase || returnFor(n.time)) continue;
+      const strike = strikeFor(n.time);
+      const r = returns[returnCursor]; returnCursor = (returnCursor + 1) % returns.length;
+      r.id = n.time;
+      r.startAt = strike?.at ?? n.returnStartedAt ?? t - n.returnProgress * 0.4;
+      const nextLaunch = (n.nextTime ?? Infinity) - frame.approachTime;
+      const duration = nextLaunch - r.startAt;
+      const rally = duration >= RALLY_MIN_RETURN && duration <= RALLY_MAX_RETURN;
+      r.rallyTime = rally ? n.nextTime! : Infinity;
+      r.endAt = rally ? nextLaunch : r.startAt + DRILL_RETURN_SECONDS;
+      r.endX = rally ? courtX(n.nextStartX ?? 400) : -0.88;
+      if (strike) set(r.from, strike.pos[0], strike.pos[1], strike.pos[2]);
+      else set(r.from, courtX(n.returnStartX ?? n.targetX), CONTACT.playerY, CONTACT.holdZ);
+      if (rally) enqueue(r.rallyTime, 1, r.endAt, r.endX, CONTACT.serveZ);
+    }
+    // Preview exists only for animation; Game still spawns every incoming at
+    // note.time - approachTime. History makes launch/preview dedup allocation-free.
+    const previews = frame.upcomingFeeds;
+    if (previews) for (let i = 0; i < previews.length; i++) {
+      const n = previews[i];
+      if (!rallyInto(n.time)) enqueue(n.time, 0, n.time - frame.approachTime, courtX(n.startX), CONTACT.serveZ);
+    }
+    for (let i = 0; i < frame.notes.length; i++) {
+      const n = frame.notes[i], launch = n.time - frame.approachTime;
+      if (launch >= t - 0.12 && !rallyInto(n.time)) enqueue(n.time, 0, launch, courtX(n.startX), CONTACT.serveZ);
+    }
     let event: typeof events[number] | undefined;
     for (let i = 0; i < events.length; i++) {
       const e = events[i];
       if (e.pending && (!event || e.at < event.at)) event = e;
     }
-    if (event && event.at - t < 0.3 && t >= stranger.contactAt - 0.001) {
+    if (event && event.at - t <= FEED_LEAD && t >= stranger.contactAt - 0.001) {
       event.pending = false;
-      stranger.prepare(t, Math.max(t + 0.025, event.at), event.x, event.z, event.id, event.kind === 0);
+      stranger.prepare(t, Math.max(t + 0.025, event.at), event.x, event.z, event.id);
+      if (event.kind === 0) stranger.feed(t, stranger.contactAt, event.x);
     }
     let bodyX = courtX(frame.playerX) - 0.3;
     if (next && next.time - t < 0.3) {
@@ -432,5 +543,5 @@ export function createAnimator(): Animator {
     stranger.render(t, dt, npcX + 0.28, gazeX, gazeZ, false);
     return result;
   }
-  return { update, idle, reset, strikeFor };
+  return { update, idle, reset, strikeFor, returnFor, feedBall: () => stranger.ball(lastSongTime) };
 }

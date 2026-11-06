@@ -6,12 +6,13 @@
 // their shadows, then 2D overlays (sparks, judgement text, HUD) on top.
 import type { NoteType } from '../../types/beatmap';
 import type { HitFeedback, HitResult } from '../../types/game';
-import { clamp, lerp, type RGB } from './engine3d';
+import type { RGB } from './engine3d';
 import { TABLE_HALF_W, TABLE_Z } from './courtyard';
 import { project } from '../scene/camera';
 import { presentScene } from '../scene/backend';
 import { createAnimator } from '../anim/animator';
-import { flightHeight, incomingBall } from '../anim/flight';
+import { incomingBall, returningBall, RETURN_FADE_SECONDS } from '../anim/flight';
+import type { OpponentNote } from '../anim/flight';
 import type { BallView, SceneFrame } from '../scene/types';
 import type { Look } from './figures';
 import { drawText } from './font';
@@ -31,6 +32,9 @@ export interface NoteView {
   returnStartY?: number;
   /** Song time of the press that returned this ball. */
   hitTime?: number;
+  returnStartedAt?: number;
+  nextTime?: number;
+  nextStartX?: number;
   startX: number;
   targetX: number;
   switchControlX?: number;
@@ -53,6 +57,7 @@ export interface FrameState {
   beat: number; // song beats elapsed, for breathing
   approachTime: number;
   notes: NoteView[];
+  upcomingFeeds?: readonly OpponentNote[];
   world: FrameWorld;
   playerX: number; // world x, already smoothed
   serving: boolean;
@@ -78,10 +83,7 @@ const METRES_PER_UNIT_Y = 3.0 / 280;
 const toX = (x: number) => (x - CENTER) * METRES_PER_UNIT_X;
 const toY = (y: number) => (NET_LINE - y) * METRES_PER_UNIT_Y;
 const PLAYER_HIT_Y = -1.5;
-const NPC_HIT_Y = 1.5;
 const BALL_R = 0.055;
-/** Game.tsx's return flight: returnProgress advances 2.5 per second. */
-const RETURN_SECONDS = 0.4;
 // ---------- Look ----------
 const NOTE_COLORS: Record<NoteType, RGB> = {
   normal: [244, 242, 236],
@@ -154,23 +156,21 @@ function noteToBall(note: NoteView, frame: FrameState, out: BallView): boolean {
     return ballAt(out, toX(note.x), PLAYER_HIT_Y, TABLE_Z + .24, color, 1, note.holdProgress ?? 0);
   }
   if (note.returnPhase) {
-    const strike = animator.strikeFor(note.time);
-    if (strike) {
-      // The ball comes on until the paddle reaches it, then leaves from that point.
-      if (frame.songTime < strike.at) {
-        incomingBall(note, frame.songTime, frame.approachTime, out.pos);
-        return ballAt(out, out.pos[0], out.pos[1], out.pos[2], color);
-      }
-      const start = clamp((strike.at - strike.hitTime) / RETURN_SECONDS, 0, 0.5);
-      const p = clamp((note.returnProgress - start) / (1 - start), 0, 1);
-      const [sx, sy, sz] = strike.pos;
-      const settle = (1 - p) * (1 - p) * (sz - (TABLE_Z + BALL_R + flightHeight(0)));
-      return ballAt(out, lerp(sx, toX(CENTER), p), lerp(sy, NPC_HIT_Y, p), TABLE_Z + BALL_R + flightHeight(p) + settle, color);
+    const flight = animator.returnFor(note.time);
+    if (!flight) return false;
+    if (frame.songTime < flight.startAt) {
+      // Preserve the player's strikeFor contact: never launch from the hit line.
+      incomingBall(note, frame.songTime, frame.approachTime, out.pos);
+      return ballAt(out, out.pos[0], out.pos[1], out.pos[2], color);
     }
-    const p = note.returnProgress;
-    const fromX = toX(note.returnStartX ?? note.targetX);
-    return ballAt(out, lerp(fromX, toX(CENTER), p), lerp(PLAYER_HIT_Y, NPC_HIT_Y, p), TABLE_Z + BALL_R + flightHeight(p), color);
+    if (Number.isFinite(flight.rallyTime) && frame.songTime >= flight.endAt) return false;
+    const age = Math.max(0, frame.songTime - flight.endAt);
+    if (age >= RETURN_FADE_SECONDS) return false;
+    returningBall(flight, frame.songTime, out.pos);
+    const alpha = age > 0.48 ? Math.max(0, 1 - (age - 0.48) / (RETURN_FADE_SECONDS - 0.48)) : 1;
+    return ballAt(out, out.pos[0], out.pos[1], out.pos[2], age > 0.48 ? MISSED_COLOR : color, alpha);
   }
+
   if (!note.hit) {
     incomingBall(note, frame.songTime, frame.approachTime, out.pos);
     return ballAt(out, out.pos[0], out.pos[1], out.pos[2], color);
@@ -201,6 +201,11 @@ export function describeFrame(frame: FrameState): SceneFrame {
       sceneFrame.balls.push({ pos: [0, 0, 0], color: NOTE_COLORS.normal, alpha: 1, holdProgress: -1 });
     if (noteToBall(note, frame, sceneFrame.balls[sceneFrame.ballCount]))
       sceneFrame.ballCount++;
+  }
+  // The ball in the free hand becomes the feed at launch; rally strokes have none.
+  const feed = animator.feedBall();
+  if (feed && sceneFrame.ballCount < sceneFrame.balls.length) {
+    ballAt(sceneFrame.balls[sceneFrame.ballCount++], feed[0], feed[1], feed[2], NOTE_COLORS.normal);
   }
   sceneFrame.laneCount = frame.world.lanes.length;
   for (let i = 0; i < sceneFrame.laneCount; i++) {
