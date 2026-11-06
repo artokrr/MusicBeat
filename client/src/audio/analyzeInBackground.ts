@@ -1,33 +1,54 @@
-import { analyzeBeatmap } from './BeatDetector';
+import { exposeBeatmapDebug, isBeatmapDebugEnabled } from '../beatmap/beatmapDebug';
 
-import type { BeatAnalysis } from '../types/beatmap';
+import type { Beatmap } from '../types/beatmap';
 
-/**
- * Analyzes a decoded song in a Web Worker so the page stays responsive.
- * Falls back to the main thread if workers aren't available or the worker fails.
- */
-export async function analyzeInBackground(audioBuffer: AudioBuffer): Promise<BeatAnalysis> {
-  if (typeof Worker === 'undefined') return analyzeBeatmap(audioBuffer);
+export interface PreparedSong {
+  beatmap: Beatmap;
+  usedFallback: boolean;
+}
+
+/** Both analysis and map generation run off the UI thread. Keep decoding's
+ * AudioBuffer intact for playback; transfer copies of its PCM to the worker. */
+export async function prepareSongInBackground(audioBuffer: AudioBuffer, signal?: AbortSignal): Promise<PreparedSong> {
+  const checkCancelled = () => {
+    if (signal?.aborted) throw signal.reason ?? new DOMException('Preparation cancelled', 'AbortError');
+  };
+  checkCancelled();
+  const debug = isBeatmapDebugEnabled();
+  const fallback = async () => {
+    // Worker-less browsers retain the same algorithms without putting their
+    // code in the entry bundle for everyone else.
+    const [{ analyzeBeatmap }, { generateBeatmap }] = await Promise.all([
+      import('./BeatDetector'), import('../beatmap/BeatmapGenerator'),
+    ]);
+    checkCancelled();
+    const analysis = await analyzeBeatmap(audioBuffer);
+    checkCancelled();
+    return { beatmap: generateBeatmap(analysis, { debug }), usedFallback: analysis.usedFallback };
+  };
+  if (typeof Worker === 'undefined') return fallback();
   try {
-    return await new Promise<BeatAnalysis>((resolve, reject) => {
+    return await new Promise<PreparedSong>((resolve, reject) => {
       const worker = new Worker(new URL('./analysis.worker.ts', import.meta.url), { type: 'module' });
-      const channels = Array.from({ length: audioBuffer.numberOfChannels }, (_, i) => audioBuffer.getChannelData(i).slice());
-      worker.onmessage = (event: MessageEvent<{ ok: boolean; analysis?: BeatAnalysis; error?: string }>) => {
-        worker.terminate();
-        if (event.data.ok && event.data.analysis) resolve(event.data.analysis);
-        else reject(new Error(event.data.error ?? 'Analysis failed'));
+      const cleanup = () => { signal?.removeEventListener('abort', abort); worker.terminate(); };
+      const abort = () => { cleanup(); reject(signal?.reason ?? new DOMException('Preparation cancelled', 'AbortError')); };
+      signal?.addEventListener('abort', abort, { once: true });
+      worker.onmessage = (event: MessageEvent<PreparedSong & { ok: boolean; error?: string }>) => {
+        cleanup();
+        if (event.data.ok && event.data.beatmap) {
+          if (event.data.beatmap.debug) exposeBeatmapDebug(event.data.beatmap.debug);
+          resolve({ beatmap: event.data.beatmap, usedFallback: event.data.usedFallback });
+        } else reject(new Error(event.data.error ?? 'Song preparation failed'));
       };
-      worker.onerror = (event) => {
-        worker.terminate();
-        reject(new Error(event.message || 'Analysis worker crashed'));
-      };
-      worker.postMessage(
-        { channels, sampleRate: audioBuffer.sampleRate, length: audioBuffer.length },
-        channels.map((c) => c.buffer),
-      );
+      worker.onerror = (event) => { cleanup(); reject(new Error(event.message || 'Preparation worker crashed')); };
+      try {
+        const channels = Array.from({ length: audioBuffer.numberOfChannels }, (_, i) => audioBuffer.getChannelData(i).slice());
+        worker.postMessage({ channels, sampleRate: audioBuffer.sampleRate, length: audioBuffer.length, debug }, channels.map(c => c.buffer));
+      } catch (error) { cleanup(); reject(error); }
     });
   } catch (error) {
-    console.warn('Background analysis failed; analyzing on the main thread.', error);
-    return analyzeBeatmap(audioBuffer);
+    if (signal?.aborted) throw error;
+    console.warn('Background preparation failed; preparing on the main thread.', error);
+    return fallback();
   }
 }

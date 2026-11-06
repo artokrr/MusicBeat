@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { analyzeInBackground } from '../audio/analyzeInBackground';
-import { generateBeatmap } from '../beatmap/BeatmapGenerator';
+import { prepareSongInBackground } from '../audio/analyzeInBackground';
 import { at, u } from '../game/pixel/layout';
 import PxText from '../game/pixel/PxText';
 import { useGameStore } from '../store/gameStore';
@@ -29,6 +28,7 @@ export default function LoadingScreen() {
     // A newer upload (or leaving this screen) supersedes this run: its results
     // must not overwrite the newer song's beatmap or reopen gameplay.
     let cancelled = false;
+    const abort = new AbortController();
     let startTimer: number | undefined;
     const current = () => !cancelled && useGameStore.getState().audioBuffer === audioBuffer;
 
@@ -37,18 +37,16 @@ export default function LoadingScreen() {
         setWarning(null);
         setProgress(20);
 
-        const analysis = await analyzeInBackground(audioBuffer);
+        const prepared = await prepareSongInBackground(audioBuffer, abort.signal);
         if (!current()) return;
-        if (analysis.usedFallback) {
+        if (prepared.usedFallback) {
           setWarning('simple mode');
         }
         setProgress(60);
 
-        const beatmap = generateBeatmap(analysis);
-        if (!current()) return;
         setProgress(100);
 
-        setBeatmap(beatmap);
+        setBeatmap(prepared.beatmap);
 
         startTimer = window.setTimeout(() => {
           if (current()) setScreen('playing');
@@ -63,6 +61,7 @@ export default function LoadingScreen() {
     analyze();
     return () => {
       cancelled = true;
+      abort.abort();
       window.clearTimeout(startTimer);
     };
   }, [audioBuffer, setBeatmap, setScreen]);

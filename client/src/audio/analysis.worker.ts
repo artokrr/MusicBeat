@@ -1,10 +1,12 @@
 // Runs song analysis off the main thread.
 import { analyzeBeatmap } from './BeatDetector';
+import { generateBeatmap } from '../beatmap/BeatmapGenerator';
 
 interface AnalysisRequest {
   channels: Float32Array<ArrayBuffer>[];
   sampleRate: number;
   length: number;
+  debug: boolean;
 }
 
 const scope = self as unknown as {
@@ -13,7 +15,7 @@ const scope = self as unknown as {
 };
 
 scope.onmessage = async (event) => {
-  const { channels, sampleRate, length } = event.data;
+  const { channels, sampleRate, length, debug } = event.data;
   try {
     const analysis = await analyzeBeatmap({
       numberOfChannels: channels.length,
@@ -22,7 +24,8 @@ scope.onmessage = async (event) => {
       duration: length / sampleRate,
       getChannelData: (index: number) => channels[index]!,
     });
-    scope.postMessage({ ok: true, analysis });
+    const beatmap = generateBeatmap(analysis, { debug });
+    scope.postMessage({ ok: true, beatmap, usedFallback: analysis.usedFallback });
   } catch (error) {
     scope.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }

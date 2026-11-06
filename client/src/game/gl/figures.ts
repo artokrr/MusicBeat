@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BONES } from '../rig/joints';
 import { prepareMeshGeometry } from './geometry';
 import { capsuleDepthMaterial, pixelMaterial } from './material';
+import { modelBytes } from './model';
 import { boneColor, createProceduralRig, disposeRig, GLTF_TO_WORLD, PoseRetargeter } from './retarget';
 import type { BufferAttribute, BufferGeometry, Scene, ShaderMaterial } from 'three';
 import type { Look } from '../pixel/figures';
@@ -153,10 +154,7 @@ export class Figure {
   }
   private async load() {
     try {
-      const response = await fetch(`/models/${this.name}.glb`, { signal: this.abort.signal });
-      if (!response.ok)
-        return;
-      const data = await response.arrayBuffer();
+      const data = await modelBytes(this.name, this.abort.signal);
       if (data.byteLength < 4 || new DataView(data).getUint32(0, true) !== 0x46546c67)
         return; // Vite HTML fallback
       const gltf = await new GLTFLoader().parseAsync(data, `${location.origin}/models/`);

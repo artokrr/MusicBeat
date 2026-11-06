@@ -17,7 +17,8 @@ export type GameSoundEvent =
 
 interface GameProps {
   beatmap: Beatmap;
-  currentTime: number;
+  /** Read the audio clock directly, without sending every tick through React. */
+  getCurrentTime: () => number;
   isPlaying: boolean;
   volume: number;
   /** Sound cues at the exact moment things happen (see audio/sfx.ts). */
@@ -126,7 +127,7 @@ interface ActiveNote extends BeatNote {
   holdTickEverySec?: number;
 }
 
-export default function Game({ beatmap, currentTime, isPlaying, volume, onSound, countdown = null, fadeStartMs = null, children }: GameProps) {
+export default function Game({ beatmap, getCurrentTime, isPlaying, volume, onSound, countdown = null, fadeStartMs = null, children }: GameProps) {
   // Cache only the visual origins/lookahead. Incoming spawning and judgement stay below.
   const opponentSchedule = useMemo<OpponentNote[]>(() => {
     const schedule = beatmap.notes.map(note => ({
@@ -169,6 +170,7 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
   // Handle player input (press down)
   const handleInputDown = useCallback((laneIndex: LaneIndex) => {
     if (!isPlaying) return;
+    const currentTime = getCurrentTime();
 
     // Get dynamic timing windows from difficulty settings
     const settings = getGameplaySettings();
@@ -287,10 +289,11 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
     } else {
       onSound({ kind: 'swing', lane: laneIndex });
     }
-  }, [isPlaying, currentTime, recordHit, addHitFeedback, onSound]);
+  }, [isPlaying, getCurrentTime, beatmap, getGameplaySettings, recordHit, addHitFeedback, onSound]);
 
   // Handle player input release (for hold notes)
   const handleInputUp = useCallback((laneIndex: LaneIndex) => {
+    const currentTime = getCurrentTime();
     isHoldingRef.current = false;
     if (holdingLaneRef.current === laneIndex) {
       holdingLaneRef.current = null;
@@ -334,7 +337,7 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
         activeHoldNoteRef.current = null;
       }
     }
-  }, [currentTime, recordHit, addHitFeedback, onSound]);
+  }, [getCurrentTime, recordHit, addHitFeedback, onSound]);
 
   // Input handlers
   useEffect(() => {
@@ -436,6 +439,8 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
     if (!ctx) return;
 
     const render = () => {
+      const currentTime = getCurrentTime();
+
       const activeNotes = activeNotesRef.current;
       
       // Get dynamic approach time from difficulty settings
@@ -665,19 +670,21 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
         }
       });
 
-      // Screen shake (world units; the renderer snaps it to whole pixels)
+      const nowMs = performance.now();
+      const dt = Math.min(0.1, Math.max(0, (nowMs - (lastFrameMsRef.current || nowMs)) / 1000));
+      lastFrameMsRef.current = nowMs;
+
+      // Screen shake (world units; the renderer snaps it to whole pixels).
+      // Preserve the old per-frame decay plus the removed 16 ms clock-effect
+      // decays. Otherwise halving render calls would lengthen every shake.
       let shakeX = 0;
       let shakeY = 0;
       if (shakeRef.current.intensity > 0) {
         shakeX = (Math.random() - 0.5) * shakeRef.current.intensity;
         shakeY = (Math.random() - 0.5) * shakeRef.current.intensity;
-        shakeRef.current.intensity *= 0.9; // Decay
+        shakeRef.current.intensity *= Math.pow(0.9, isPlaying ? 1 + dt / 0.016 : 1);
         if (shakeRef.current.intensity < 0.5) shakeRef.current.intensity = 0;
       }
-
-      const nowMs = performance.now();
-      const dt = Math.min(0.1, Math.max(0, (nowMs - (lastFrameMsRef.current || nowMs)) / 1000));
-      lastFrameMsRef.current = nowMs;
 
       // The player slides to the chosen lane over a few frames instead of teleporting.
       const playerTargetX = LANES[playerLaneRef.current];
@@ -731,7 +738,7 @@ export default function Game({ beatmap, currentTime, isPlaying, volume, onSound,
     return () => {
       cancelAnimationFrame(animFrameRef.current);
     };
-  }, [currentTime, beatmap, isPlaying, recordHit, addHitFeedback, onSound]);
+  }, [getCurrentTime, beatmap, isPlaying, getGameplaySettings, recordHit, addPoints, addHitFeedback, onSound]);
 
   return <PixelStage ref={canvasRef}>{children}</PixelStage>;
 }

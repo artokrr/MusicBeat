@@ -2,6 +2,7 @@ import { BoxGeometry, Color, Group, Matrix4, Mesh } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { attributes } from './geometry';
+import { modelBytes } from './model';
 import { hash } from '../pixel/engine3d';
 import type { BufferGeometry, Material, MeshStandardMaterial, ShaderMaterial } from 'three';
 import type { Vec3 } from '../rig/joints';
@@ -73,9 +74,7 @@ export function propGeometry(root: Group, offset: Vec3 = [0, 0, 0]) {
 }
 
 export async function loadProp(name: string, signal: AbortSignal) {
-  const response = await fetch(`/models/${name}.glb`, { signal });
-  if (!response.ok) throw new Error(`${name}.glb: HTTP ${response.status}`);
-  const bytes = await response.arrayBuffer();
+  const bytes = await modelBytes(name, signal);
   if (bytes.byteLength < 4 || new DataView(bytes).getUint32(0, true) !== 0x46546c67)
     throw new Error(`${name}.glb: expected binary glTF`);
   return (await new GLTFLoader().parseAsync(bytes, `${location.origin}/models/`)).scene;

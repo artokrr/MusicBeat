@@ -58,7 +58,7 @@ interface Placed {
   switchFrom?: LaneIndex;
 }
 
-export function generateBeatmap(input: BeatAnalysis): Beatmap {
+export function generateBeatmap(input: BeatAnalysis, options: { debug?: boolean } = {}): Beatmap {
   const analysis = { ...input, onsets: withLocalSalience(input.onsets) };
   const { bpm, duration } = analysis;
   const beatSec = 60 / bpm;
@@ -158,7 +158,7 @@ export function generateBeatmap(input: BeatAnalysis): Beatmap {
     switchFromLaneIndex: p.switchFrom,
   }));
 
-  const debug = isBeatmapDebugEnabled() ? buildDebugReport(analysis, notes, bars.length) : undefined;
+  const debug = (options.debug ?? isBeatmapDebugEnabled()) ? buildDebugReport(analysis, notes, bars.length) : undefined;
   if (debug) exposeBeatmapDebug(debug);
 
   return {
