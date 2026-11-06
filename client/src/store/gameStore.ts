@@ -233,9 +233,15 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
   clearOldFeedbacks: () => {
     const now = Date.now();
-    set((state) => ({
-      hitFeedbacks: state.hitFeedbacks.filter((f) => now - f.timestamp < 1000),
-    }));
+    const feedbacks = get().hitFeedbacks;
+    // Usually nothing expires on this frame. Preserve the array and avoid
+    // notifying every store subscriber for an unchanged judgement list.
+    for (const feedback of feedbacks) {
+      if (now - feedback.timestamp >= 1000) {
+        set({ hitFeedbacks: feedbacks.filter((f) => now - f.timestamp < 1000) });
+        break;
+      }
+    }
   },
 
   resetGame: () => {

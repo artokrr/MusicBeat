@@ -377,6 +377,7 @@ function drawCountdown(ctx: CanvasRenderingContext2D, value: number) {
 export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
   const description = describeFrame(frame);
   const backend = presentScene(ctx, description);
+  if (backend === null) return;
   releaseBursts(frame);
   for (let i = 0; i < description.ballCount; i++) {
     const ball = description.balls[i];
@@ -416,6 +417,7 @@ export function renderIdleScene(ctx: CanvasRenderingContext2D, nowMs: number, dt
   sceneFrame.ballCount = sceneFrame.laneCount = 0;
   sceneFrame.shakeX = sceneFrame.shakeY = 0;
   const backend = presentScene(ctx, sceneFrame);
+  if (backend === null) return;
   if (backend === 'cpu') drawSnow(ctx, nowMs, dt);
 }
 /** Read-only until the next render; use structuredClone for offline comparisons. */

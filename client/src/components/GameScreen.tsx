@@ -20,6 +20,8 @@ export default function GameScreen() {
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const startTimeRef = useRef<number>(0);
+  const stoppedTimeRef = useRef(0);
+  const clockRunningRef = useRef(false);
   const lastDrainTimeRef = useRef<number>(0);
   const failTimeoutRef = useRef<number | null>(null);
   const hasFinalizedRunRef = useRef(false);
@@ -27,7 +29,8 @@ export default function GameScreen() {
   const ignoreOnEndedRef = useRef(false);
 
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
+  // Only the optional diagnostics panel needs a React clock, once per bin.
+  const [debugTime, setDebugTime] = useState(0);
   const [countdown, setCountdown] = useState(3);
   const countdownRef = useRef(countdown);
   countdownRef.current = countdown;
@@ -46,13 +49,15 @@ export default function GameScreen() {
   const setMusicVolume = useGameStore((state) => state.setMusicVolume);
   const sfxVolume = useGameStore((state) => state.sfxVolume);
   const setSfxVolume = useGameStore((state) => state.setSfxVolume);
-  const health = useGameStore((state) => state.health);
-  const missStreak = useGameStore((state) => state.missStreak);
   const setRunOutcome = useGameStore((state) => state.setRunOutcome);
   const applyPassiveDrain = useGameStore((state) => state.applyPassiveDrain);
   const [showDebugOverlay, setShowDebugOverlay] = useState(true);
 
   const gameplaySettings = useMemo(() => DIFFICULTY_PRESETS[difficulty], [difficulty]);
+  const getCurrentTime = useCallback(() => {
+    const context = audioContextRef.current;
+    return context && clockRunningRef.current ? context.currentTime - startTimeRef.current : stoppedTimeRef.current;
+  }, []);
 
   const clearFailTimeout = useCallback(() => {
     if (failTimeoutRef.current === null) return;
@@ -61,6 +66,10 @@ export default function GameScreen() {
   }, []);
 
   const closeAudio = useCallback(() => {
+    if (audioContextRef.current && clockRunningRef.current) {
+      stoppedTimeRef.current = audioContextRef.current.currentTime - startTimeRef.current;
+    }
+    clockRunningRef.current = false;
     try {
       sourceNodeRef.current?.stop();
     } catch (error) {
@@ -93,6 +102,10 @@ export default function GameScreen() {
     if (hasFinalizedRunRef.current || failSequenceStartedRef.current) return;
 
     failSequenceStartedRef.current = true;
+    // Keep the original frozen tableau while the audio winds down and the
+    // canvas fades. Pausing already freezes the AudioContext itself.
+    stoppedTimeRef.current = getCurrentTime();
+    clockRunningRef.current = false;
     setFailStartMs(performance.now());
     sfx.fail();
     setRunOutcome(reason);
@@ -124,7 +137,7 @@ export default function GameScreen() {
     failTimeoutRef.current = window.setTimeout(() => {
       finalizeRun(reason);
     }, FAIL_AUDIO_DURATION_MS);
-  }, [clearFailTimeout, finalizeRun, setPhase, setRunOutcome]);
+  }, [clearFailTimeout, finalizeRun, getCurrentTime, setPhase, setRunOutcome]);
 
   // Sound cues from the game (hits, misses, finished holds, empty swings).
   const handleSound = useCallback((event: GameSoundEvent) => {
@@ -167,7 +180,7 @@ export default function GameScreen() {
     clearFailTimeout();
 
     setRunOutcome(null);
-    setCurrentTime(0);
+    setDebugTime(0);
     setCountdown(0);
 
     const audioContext = new AudioContext();
@@ -193,6 +206,8 @@ export default function GameScreen() {
     sourceNodeRef.current = sourceNode;
     sfx.go();
     startTimeRef.current = audioContext.currentTime;
+    stoppedTimeRef.current = 0;
+    clockRunningRef.current = true;
     lastDrainTimeRef.current = 0;
 
     setIsPlaying(true);
@@ -232,60 +247,43 @@ export default function GameScreen() {
     return () => clearInterval(countdownInterval);
   }, [phase, startGame]);
 
-  // Update current time
-  useEffect(() => {
-    if (!isPlaying || !audioContextRef.current) return;
-
-    const updateTime = () => {
-      if (audioContextRef.current) {
-        const time = audioContextRef.current.currentTime - startTimeRef.current;
-        setCurrentTime(time);
-      }
-    };
-
-    const interval = setInterval(updateTime, 16);
-    return () => clearInterval(interval);
-  }, [isPlaying]);
-
-  // Passive HP drain while gameplay is active.
-  useEffect(() => {
-    if (phase !== 'playing') {
-      lastDrainTimeRef.current = currentTime;
-      return;
-    }
-
-    const deltaSeconds = Math.max(0, currentTime - lastDrainTimeRef.current);
-    lastDrainTimeRef.current = currentTime;
-    // HP only drains while there's something to play; a long quiet passage
-    // with no notes would otherwise kill a player who hit everything.
-    if (deltaSeconds > 0 && beatmap && isNearNote(beatmap.notes, currentTime)) {
-      applyPassiveDrain(deltaSeconds);
-    }
-  }, [applyPassiveDrain, beatmap, currentTime, phase]);
-
-  // Defeat checks:
-  // - miss streak fails immediately (osu-style),
-  // - HP fail starts after grace period.
-  useEffect(() => {
-    if (phase !== 'playing') return;
-
-    if (gameplaySettings.missStreakFail !== null && missStreak >= gameplaySettings.missStreakFail) {
+  const checkFailure = useCallback(() => {
+    const state = useGameStore.getState();
+    if (state.phase !== 'playing') return;
+    if (gameplaySettings.missStreakFail !== null && state.missStreak >= gameplaySettings.missStreakFail) {
       triggerFail('miss_streak');
       return;
     }
-
-    if (currentTime >= gameplaySettings.failGraceSec && health <= 0) {
+    if (getCurrentTime() >= gameplaySettings.failGraceSec && state.health <= 0) {
       triggerFail('hp_depleted');
     }
-  }, [
-    currentTime,
-    gameplaySettings.failGraceSec,
-    gameplaySettings.missStreakFail,
-    health,
-    missStreak,
-    phase,
-    triggerFail,
-  ]);
+  }, [gameplaySettings, getCurrentTime, triggerFail]);
+
+  // Keep drain cadence and immediate defeat checks outside React. The canvas
+  // and input handlers read the same AudioContext clock, including suspension.
+  useEffect(() => {
+    if (phase !== 'playing' || !beatmap) return;
+    lastDrainTimeRef.current = getCurrentTime();
+    let nextDebugChange = 0;
+    const updateTime = () => {
+      const time = getCurrentTime();
+      const delta = Math.max(0, time - lastDrainTimeRef.current);
+      lastDrainTimeRef.current = time;
+      if (delta > 0 && isNearNote(beatmap.notes, time)) applyPassiveDrain(delta);
+      checkFailure();
+      if (beatmap.debug?.enabled && time >= nextDebugChange) {
+        const window = beatmap.debug.windows.find(w => time >= w.startSec && time < w.endSec);
+        nextDebugChange = window?.endSec ?? Infinity;
+        setDebugTime(time);
+      }
+    };
+    const unsubscribe = useGameStore.subscribe((state, previous) => {
+      if (state.health !== previous.health || state.missStreak !== previous.missStreak) checkFailure();
+    });
+    const interval = window.setInterval(updateTime, 16);
+    checkFailure();
+    return () => { window.clearInterval(interval); unsubscribe(); };
+  }, [phase, beatmap, getCurrentTime, applyPassiveDrain, checkFailure]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -342,15 +340,15 @@ export default function GameScreen() {
       const windowInfo = windows[i]!;
       const isLast = i === windows.length - 1;
       if (
-        (currentTime >= windowInfo.startSec && currentTime < windowInfo.endSec) ||
-        (isLast && currentTime >= windowInfo.startSec)
+        (debugTime >= windowInfo.startSec && debugTime < windowInfo.endSec) ||
+        (isLast && debugTime >= windowInfo.startSec)
       ) {
         return windowInfo;
       }
     }
 
     return windows[windows.length - 1];
-  }, [debugReport, currentTime]);
+  }, [debugReport, debugTime]);
 
   const nextRiskWindow = useMemo(() => {
     if (!debugReport?.enabled || currentDebugWindow === undefined) return undefined;
@@ -386,7 +384,7 @@ export default function GameScreen() {
     <div ref={containerRef} style={styles.container}>
       <Game
         beatmap={beatmap}
-        currentTime={currentTime}
+        getCurrentTime={getCurrentTime}
         isPlaying={isPlaying && phase === 'playing'}
         volume={volume}
         onSound={handleSound}
@@ -491,7 +489,7 @@ export default function GameScreen() {
                     clearFailTimeout();
                     closeAudio();
                     setIsPlaying(false);
-                    setCurrentTime(0);
+                    setDebugTime(0);
                     setCountdown(3);
                     resetGame();
                   }}
