@@ -1,4 +1,5 @@
 import { exposeBeatmapDebug, isBeatmapDebugEnabled } from '../beatmap/beatmapDebug';
+import { isAmbush } from '../game/ambush';
 
 import type { Beatmap } from '../types/beatmap';
 
@@ -15,6 +16,8 @@ export async function prepareSongInBackground(audioBuffer: AudioBuffer, signal?:
   };
   checkCancelled();
   const debug = isBeatmapDebugEnabled();
+  // An ambush's first ball is served during the countdown, so its map has no lead-in.
+  const leadInSec = isAmbush() ? 0 : undefined;
   const fallback = async () => {
     // Worker-less browsers retain the same algorithms without putting their
     // code in the entry bundle for everyone else.
@@ -24,7 +27,7 @@ export async function prepareSongInBackground(audioBuffer: AudioBuffer, signal?:
     checkCancelled();
     const analysis = await analyzeBeatmap(audioBuffer);
     checkCancelled();
-    return { beatmap: generateBeatmap(analysis, { debug }), usedFallback: analysis.usedFallback };
+    return { beatmap: generateBeatmap(analysis, { debug, leadInSec }), usedFallback: analysis.usedFallback };
   };
   if (typeof Worker === 'undefined') return fallback();
   try {
@@ -43,7 +46,7 @@ export async function prepareSongInBackground(audioBuffer: AudioBuffer, signal?:
       worker.onerror = (event) => { cleanup(); reject(new Error(event.message || 'Preparation worker crashed')); };
       try {
         const channels = Array.from({ length: audioBuffer.numberOfChannels }, (_, i) => audioBuffer.getChannelData(i).slice());
-        worker.postMessage({ channels, sampleRate: audioBuffer.sampleRate, length: audioBuffer.length, debug }, channels.map(c => c.buffer));
+        worker.postMessage({ channels, sampleRate: audioBuffer.sampleRate, length: audioBuffer.length, debug, leadInSec }, channels.map(c => c.buffer));
       } catch (error) { cleanup(); reject(error); }
     });
   } catch (error) {

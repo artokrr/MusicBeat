@@ -7,6 +7,7 @@ interface AnalysisRequest {
   sampleRate: number;
   length: number;
   debug: boolean;
+  leadInSec?: number;
 }
 
 const scope = self as unknown as {
@@ -15,7 +16,7 @@ const scope = self as unknown as {
 };
 
 scope.onmessage = async (event) => {
-  const { channels, sampleRate, length, debug } = event.data;
+  const { channels, sampleRate, length, debug, leadInSec } = event.data;
   try {
     const analysis = await analyzeBeatmap({
       numberOfChannels: channels.length,
@@ -24,7 +25,7 @@ scope.onmessage = async (event) => {
       duration: length / sampleRate,
       getChannelData: (index: number) => channels[index]!,
     });
-    const beatmap = generateBeatmap(analysis, { debug });
+    const beatmap = generateBeatmap(analysis, { debug, leadInSec });
     scope.postMessage({ ok: true, beatmap, usedFallback: analysis.usedFallback });
   } catch (error) {
     scope.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) });
