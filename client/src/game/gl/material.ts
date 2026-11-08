@@ -141,7 +141,9 @@ void main() {
  // Solid core and three visibility bands, Bayer only at the transitions.
  moonVisibility=floor(moonVisibility*3.+dither)/3.;
  lampVisibility=floor(lampVisibility*3.+dither)/3.;
- warm*=lampVisibility;
+ warm*=lampVisibility*1.35;
+ // Keep the black hood closure out of direct sodium tint as well as bounce.
+ if(max(base.r,max(base.g,base.b))<=.09) warm=0.;
  #endif
  float light=.34+max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.42*moonVisibility+warm;
  #ifdef PREMIUM_LOOK
@@ -167,9 +169,9 @@ void main() {
   color=mix(snow*k,vec3(255,196,140)*k*.9,min(.5,warm*.7))/255.;
   #ifdef PREMIUM_LOOK
   // Sum independently occluded light, then roll off the pool highlights.
-  float sky=.46+max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.24*moonVisibility;
-  color=snow/255.*sky/.75 + vec3(.48,.33,.17)*warm;
-  color=color/(1.+max(vec3(0.),color-.65)*.65);
+  float sky=.25+max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.28*moonVisibility;
+  color=snow/255.*sky/.75 + vec3(1.25,1.05,.75)*warm;
+  color=color/(1.+max(vec3(0.),color-.85)*.30);
   #endif
  } else {
   int tone=int(clamp(floor(light*4.2+.3+(dither-.5)*vSurface.z),0.,4.));

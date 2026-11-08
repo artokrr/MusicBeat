@@ -1,3 +1,4 @@
+import { PREMIUM_LOOK } from '../scene/look';
 import { paintRecorderBody } from '../scene/recorder';
 // The courtyard at night: camera, light, and everything that never moves.
 // World units are metres: x to the right, y away from the camera along the
@@ -60,6 +61,15 @@ function paintGround(R: Renderer3D) {
     // Close tones, so the dither reads as texture rather than a checkerboard.
     const base = SNOW_TONES[clamp(Math.floor(v * 4 + (bayer(ix, iy) - 0.5) * 0.6), 0, 3)]!;
     const [l, warm] = R.lightAt(p, [0, 0, 1]);
+    if (PREMIUM_LOOK) {
+      // Match the GL snow's separated cold fill / sodium contribution.
+      const sky = .25 + .28 * .7 / Math.hypot(.45, .55, .7);
+      const lamp = Math.min(1, warm * 1.35);
+      return base.map((v, c) => {
+        const color = v / 255 * sky / .75 + [1.25, 1.05, .75][c] * lamp;
+        return 255 * color / (1 + Math.max(0, color - .85) * .30);
+      }) as RGB;
+    }
     const k = clamp(l / 0.75, 0.35, 1.6);
     const w = Math.min(0.5, warm * 0.7);
     return [lerp(base[0] * k, 255 * k * 0.9, w), lerp(base[1] * k, 196 * k * 0.9, w), lerp(base[2] * k, 140 * k * 0.9, w)];

@@ -138,7 +138,9 @@ export class Renderer3D {
     if (PREMIUM_LOOK) for(let i=0;i<W*H;i++) {
       const p=this.unprojectGround(i%W+.5,Math.floor(i/W)+.5);
       const light=this.lightAt(p,this.shadowUp);
-      this.lampWeight[i]=light[1]/Math.max(.01,light[0]);
+      const lamp=Math.min(1,light[1]*1.35);
+      const sky=.25+.28*Math.max(0,dot(this.shadowUp,this.moon));
+      this.lampWeight[i]=lamp/(sky+lamp);
     }
   }
 
@@ -182,6 +184,7 @@ export class Renderer3D {
 
   /** Posterize a lit colour into one of five tones, cool in the dark and warm in lamp light. */
   shade(base: RGB, l: number, warm: number, ix: number, iy: number, ditherAmt: number): RGB {
+    if (PREMIUM_LOOK && Math.max(...base) <= .09 * 255) warm = 0;
     const k = clamp(Math.floor(l * 4.2 + 0.3 + (bayer(ix, iy) - 0.5) * ditherAmt), 0, 4);
     const m = TONE_SCALE[k]!;
     const coolMix = TONE_COOL[k]!;
@@ -386,7 +389,7 @@ export class Renderer3D {
         const w=this.lampWeight[i];
         // CPU retains baked RGB; approximate independent energy loss rather
         // than applying the old equally strong tint to both lights.
-        const loss=moon*.22*(1-w)+lamp*w*.65+contact*.25;
+        const loss=moon*.22*(1-w)+lamp*w*.85+contact*.25;
         this.shadowTint[0]=1-loss-lamp*w*.12;
         this.shadowTint[1]=1-loss-lamp*w*.06;
         this.shadowTint[2]=1-loss*.85;
