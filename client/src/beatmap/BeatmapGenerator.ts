@@ -70,10 +70,12 @@ export function generateBeatmap(input: BeatAnalysis, options: { debug?: boolean 
   const chosenPerBar: Slot[][] = [];
   const templateOf: number[] = [];
   const templateUses = new Map<number, number>();
+  // Bars that lost notes to the lead-in. Their rhythm is incomplete, so they aren't copied.
+  const cutByLeadIn: boolean[] = [];
   const allChosen: number[] = []; // sorted note times, for spacing checks
   for (let b = 0; b < bars.length; b++) {
     const bar = bars[b]!;
-    let template = findTemplate(bars, b, templateOf);
+    let template = findTemplate(bars, b, templateOf, cutByLeadIn);
     // Copying an empty bar would copy silence; only bars with notes are patterns.
     if (template >= 0 && (chosenPerBar[template]?.length ?? 0) === 0) template = -1;
     // A pattern carries a phrase (up to 4 bars), then the next phrase gets its own.
@@ -101,6 +103,7 @@ export function generateBeatmap(input: BeatAnalysis, options: { debug?: boolean 
       const prevRate = prevBar ? (chosenPerBar[bars.indexOf(prevBar)]?.length ?? 0) / Math.max(0.25, prevBar.end - prevBar.start) : 0;
       chosen = chooseSlots(bar, beatSec, dropBoost ? prevRate * 1.3 : 0);
     }
+    cutByLeadIn[b] = chosen.some((s) => s.time < LEAD_IN_SEC);
     chosen = chosen.filter((s) => s.time >= LEAD_IN_SEC && fitsSpacing(allChosen, s.time));
     for (const s of chosen) insertSorted(allChosen, s.time);
     chosenPerBar[b] = chosen.sort((x, y) => x.time - y.time);
@@ -401,7 +404,7 @@ function cosine(a: number[], b: number[]): number {
 }
 
 /** An earlier bar that sounds the same, to reuse its pattern; -1 if none. */
-function findTemplate(bars: Bar[], index: number, templateOf: number[]): number {
+function findTemplate(bars: Bar[], index: number, templateOf: number[], cutByLeadIn: boolean[]): number {
   const bar = bars[index]!;
   if (bar.slots.length === 0 || bar.slots[0]!.beat < 0) return -1;
   const fp = fingerprint(bar);
@@ -410,6 +413,7 @@ function findTemplate(bars: Bar[], index: number, templateOf: number[]): number 
   // Look back up to 8 bars; prefer the original a repeat was copied from.
   for (let j = index - 1; j >= Math.max(0, index - 8); j--) {
     const other = bars[j]!;
+    if (cutByLeadIn[j]) continue;
     if (gridSlots(other).length !== gridSlots(bar).length) continue;
     if (Math.abs(other.intensity - bar.intensity) > 0.18) continue;
     const sim = cosine(fp, fingerprint(other));
