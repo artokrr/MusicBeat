@@ -1,3 +1,4 @@
+import { CassetteRecorder } from './recorder';
 import { Color, DepthTexture, DirectionalLight, Mesh, NearestFilter, NoToneMapping, OrthographicCamera, PCFSoftShadowMap, PlaneGeometry, Scene, ShaderMaterial, SpotLight, UnsignedIntType, Vector3, WebGLRenderer, WebGLRenderTarget, } from 'three';
 import { TABLE_HALF_L, TABLE_HALF_W, TABLE_Z } from '../pixel/courtyard';
 import { LOW_H, LOW_W } from '../pixel/stage';
@@ -62,6 +63,7 @@ export class GLBackend implements SceneBackend {
   private readonly outputCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private readonly yard = buildCourtyard();
   readonly props = new AuthoredCourtyard(this.yard);
+  readonly recorder = new CassetteRecorder(this.scene);
   readonly paddles = new PaddleBatch(this.scene);
   readonly snow = new WorldSnow(this.scene);
   readonly breath = new Breath(this.scene);
@@ -136,6 +138,7 @@ export class GLBackend implements SceneBackend {
   get available() { return !this.lost && !this.renderer.getContext().isContextLost(); }
   render(frame: SceneFrame) {
     lampUniform.value = lampLevel(frame.timeMs);
+    this.recorder.update(frame.recorder);
     this.snow.update(frame.timeMs);
     this.breath.update(frame);
     this.footprints.update(frame);
@@ -186,6 +189,7 @@ export class GLBackend implements SceneBackend {
     return this.renderer.domElement;
   }
   dispose() {
+    this.recorder.dispose();
     this.footprints.dispose();
     this.breath.dispose();
     this.snow.dispose();

@@ -1,3 +1,4 @@
+import { CPURecorder } from '../pixel/recorder';
 import { createCourtyard, paintCourtyard, TABLE_HALF_L, TABLE_HALF_W, TABLE_Z } from '../pixel/courtyard';
 import { drawFigure } from '../pixel/figures';
 import { makeCanvas, LOW_H, LOW_W } from '../pixel/stage';
@@ -6,6 +7,7 @@ import type { ShadowSink } from '../pixel/figures';
 import type { SceneBackend, SceneFrame } from './types';
 export class CPUBackend implements SceneBackend {
   readonly kind = 'cpu' as const;
+  private readonly recorder = new CPURecorder();
   private readonly renderer = createCourtyard();
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -25,6 +27,7 @@ export class CPUBackend implements SceneBackend {
   render(frame: SceneFrame) {
     const R = this.renderer;
     R.restore();
+    this.recorder.draw(R, frame.recorder);
     if (frame.stranger.visible)
       drawFigure(R, frame.stranger.pose, frame.stranger.look, this.shadow);
     for (let i = 0; i < frame.laneCount; i++) {

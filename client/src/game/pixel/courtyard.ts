@@ -1,3 +1,4 @@
+import { paintRecorderBody } from '../scene/recorder';
 // The courtyard at night: camera, light, and everything that never moves.
 // World units are metres: x to the right, y away from the camera along the
 // table, z up. The table is centred on the origin.
@@ -39,11 +40,13 @@ export function paintCourtyard(R: Renderer3D) {
 
 /** Shared geometry recipe; GPU batches it once instead of sampling box faces. */
 export function paintCourtyardGeometry(R: CourtyardPainter) {
+
   paintBuilding(R);
   paintTable(R);
   paintLampPost(R);
   paintBench(R);
   paintBallBasket(R);
+  paintRecorderBody(R);
   paintTree(R, [-3.4, 3.6, 0], 1.9, 0.13, 11);
   paintTree(R, [3.9, 3.9, 0], 1.7, 0.11, 23);
 }

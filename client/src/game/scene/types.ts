@@ -1,3 +1,4 @@
+import type { RecorderState } from './recorder';
 import type { RGB, Vec3 } from '../pixel/engine3d';
 import type { Look } from '../pixel/figures';
 import type { JointPose } from '../rig/joints';
@@ -20,6 +21,7 @@ export interface LaneView {
 export interface SceneFrame {
   /** Presentation clock, in milliseconds; never used for gameplay timing. */
   timeMs: number;
+  recorder: RecorderState;
   playerStrokeMs: number;
   playing: boolean;
   player: FigureView;

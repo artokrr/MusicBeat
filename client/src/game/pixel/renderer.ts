@@ -1,3 +1,4 @@
+import { recorder, sampleRecorder } from '../anim/recorder';
 // Draws one frame of the match into the 384x216 low-res canvas. Game.tsx owns
 // all gameplay state; this file only turns that state into pixels.
 //
@@ -117,7 +118,7 @@ const animator = createAnimator();
 const FLICKER_LOOK: Look = { ...STRANGER, face: [34, 32, 42] };
 const initial = animator.idle(0, 0);
 const sceneFrame: SceneFrame = {
-  timeMs: 0, playerStrokeMs: -Infinity, playing: false,
+  recorder, timeMs: 0, playerStrokeMs: -Infinity, playing: false,
   player: { pose: initial.player, look: PLAYER, visible: true },
   stranger: { pose: initial.stranger, look: STRANGER, visible: true },
   balls: Array.from({ length: 128 }, () => ({ pos: [0, 0, 0], color: NOTE_COLORS.normal, alpha: 1, holdProgress: -1 })),
@@ -179,6 +180,7 @@ function noteToBall(note: NoteView, frame: FrameState, out: BallView): boolean {
 }
 /** Compute once, consume synchronously. Exported for deterministic backend comparisons. */
 export function describeFrame(frame: FrameState): SceneFrame {
+  sampleRecorder(frame.nowMs);
   sceneFrame.timeMs = frame.nowMs;
   sceneFrame.playerStrokeMs = frame.pressedLane === null ? -Infinity : frame.nowMs - frame.pressAgeMs;
   sceneFrame.playing = frame.countdown === null;
@@ -409,6 +411,7 @@ export function renderIdleScene(ctx: CanvasRenderingContext2D, nowMs: number, dt
   withPlayer?: boolean;
   flicker?: boolean;
 } = {}) {
+  sampleRecorder(nowMs);
   sceneFrame.timeMs = nowMs;
   sceneFrame.playerStrokeMs = -Infinity;
   sceneFrame.playing = false;

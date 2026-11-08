@@ -2,12 +2,14 @@ import { BoxGeometry, Color, Group, Matrix4, Mesh } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { attributes } from './geometry';
+import { RECORDER_X, RECORDER_Y } from '../anim/recorder';
 import { modelBytes } from './model';
 import { hash } from '../pixel/engine3d';
 import type { BufferGeometry, Material, MeshStandardMaterial, ShaderMaterial } from 'three';
 import type { Vec3 } from '../rig/joints';
 
 const PLACEMENTS: ReadonlyArray<readonly [string, Vec3]> = [
+  ['cassette_recorder', [RECORDER_X, RECORDER_Y, 0]],
   ['ball_basket', [0.78, 1.95, 0]],
   ['table', [0, 0, 0]], ['bench', [-3, .6, 0]], ['lamppost', [2.25, .35, 0]],
   ['tree_bare_a', [-3.4, 3.6, 0]], ['tree_bare_b', [3.9, 3.9, 0]],
