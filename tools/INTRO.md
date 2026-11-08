@@ -1,5 +1,8 @@
 # Courtyard opening
 
+**Off by default** (Artem chose to open straight on the menu). Add `?intro` to the
+URL to play it; the tools below need that flag now.
+
 The first upload screen starts on the upper three floors of the existing panel
 block. Dark sky occupies a narrow strip above the roof; warm windows and snow
 supply the movement and colour. After the assets load, a 2 s hold leads into a

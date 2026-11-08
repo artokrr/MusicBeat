@@ -70,7 +70,7 @@ try {
     addEventListener('DOMContentLoaded',()=>__startAudio(),{once:true});
   ` });
   await send('Page.startScreencast', { format: 'png', maxWidth: 384, maxHeight: 216, everyNthFrame: 1 });
-  await send('Page.navigate', { url: `http://localhost:${vite}/${mode === 'cpu' ? '?renderer=cpu' : ''}` });
+  await send('Page.navigate', { url: `http://localhost:${vite}/${mode === 'cpu' ? '?intro&renderer=cpu' : '?intro'}` });
   await sleep(1500);
   if (mode === 'skip') await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
   const snapshots = [];

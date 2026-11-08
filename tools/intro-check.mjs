@@ -46,7 +46,8 @@ try {
   `});
   const rows=[];
   const assert=async(name,expression)=>{const ok=await evaluate(expression);rows.push({name,ok});if(!ok)throw Error(name);};
-  const nav=async(query='')=>{await send('Page.navigate',{url:`http://localhost:${vite}/${query}`});await sleep(1200);};
+  // The opening is opt-in (?intro); ?nointro checks still mean "no opening".
+  const nav=async(query='')=>{const q=query.includes('nointro')?query:(query?query.replace('?','?intro&'):'?intro');await send('Page.navigate',{url:`http://localhost:${vite}/${q}`});await sleep(1200);};
   const menu=`document.querySelector('[data-opening]')`;
   await nav();
   await assert('starts hidden',`${menu}?.dataset.opening==='active' && getComputedStyle(${menu}).visibility==='hidden'`);
