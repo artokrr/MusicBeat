@@ -105,7 +105,7 @@ const STRANGER: Look = {
   skin: [190, 160, 146],
   hair: [20, 20, 24],
   face: [14, 14, 20],
-  paddle: [150, 46, 50],
+  paddle: [62, 28, 32],
   hood: true,
   coat: true,
 };
@@ -115,7 +115,7 @@ const PLAYER: Look = {
   shoes: [190, 190, 196],
   skin: [206, 170, 150],
   hair: [30, 26, 26],
-  paddle: [150, 46, 50],
+  paddle: [62, 28, 32],
   hoodDown: true,
 };
 // ---------- Scene state ----------

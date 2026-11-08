@@ -14,7 +14,7 @@ PALETTE = {
     'stranger_skin': (190,160,146), 'face_void': (14,14,20),
     'hoodie': (52,62,82), 'jeans': (36,38,46), 'sneakers': (190,190,196),
     'player_skin': (206,170,150), 'hair': (30,26,26),
-    'rubber_red': (150,46,50), 'rubber_black': (22,23,28), 'wood': (96,78,66),
+    'rubber_red': (62,28,32), 'rubber_black': (22,23,28), 'wood': (96,78,66),
     'table_green': (42,88,84), 'court_line': (214,218,226), 'metal': (58,60,70),
     'net_mesh': (40,42,52), 'snow': (196,202,220), 'bark': (52,48,50),
     'wall': (104,106,118), 'panel_seam': (78,80,92), 'window_frame': (128,130,140),

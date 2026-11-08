@@ -78,7 +78,7 @@ All names are stable, untextured, flat base colours. RGB values in the manifest/
 |---|---|
 | `coat`, `trousers`, `shoes`, `stranger_skin`, `face_void` | 40/40/48; 30/30/38; 26/26/30; 190/160/146; 14/14/20 |
 | `hoodie`, `jeans`, `sneakers`, `player_skin`, `hair` | 52/62/82; 36/38/46; 190/190/196; 206/170/150; 30/26/26 |
-| `rubber_red`, `rubber_black`, `wood` | 150/46/50; 22/23/28; 96/78/66 |
+| `rubber_red`, `rubber_black`, `wood` | 62/28/32; 22/23/28; 96/78/66 |
 | `table_green`, `court_line`, `metal`, `net_mesh` | 42/88/84; 214/218/226; 58/60/70; 40/42/52 |
 | `snow`, `bark`, `wall` | 196/202/220; 52/48/50; 104/106/118 |
 | `panel_seam`, `window_frame`, `door` | 78/80/92; 128/130/140; 24/22/26 |
