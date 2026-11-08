@@ -71,6 +71,11 @@ export interface FrameState {
   phantomAlpha: (missAgeSec: number) => number;
   hud: HudState | null;
   countdown: number | null;
+  /**
+   * The stranger serves during this countdown (an ambush): the dark over the
+   * yard (0..1 of its usual strength) and the numbers moved off the table.
+   */
+  countdownServe?: { dim: number };
   fade: number; // 0..1 darkness over the scene (fail sequence)
 }
 // ---------- Gameplay space -> courtyard ----------
@@ -380,10 +385,17 @@ function drawSnow(ctx: CanvasRenderingContext2D, nowMs: number, dt: number) {
     ctx.fillRect(Math.round(flake.x), Math.round(flake.y), flake.size, flake.size);
   }
 }
-function drawCountdown(ctx: CanvasRenderingContext2D, value: number) {
-  ctx.fillStyle = 'rgba(10, 10, 16, 0.4)';
-  ctx.fillRect(0, 0, LOW_W, LOW_H);
-  drawText(ctx, value.toString(), LOW_W / 2, 84, PAL.text, { scale: 3, align: 'center', outline: PAL.void });
+function drawCountdown(ctx: CanvasRenderingContext2D, value: number, serve?: { dim: number }) {
+  // Hard steps, like the fail fade.
+  const dim = serve ? Math.ceil(Math.min(1, Math.max(0, serve.dim)) * 4) / 4 : 1;
+  if (dim > 0) {
+    ctx.fillStyle = `rgba(10, 10, 16, ${0.4 * dim})`;
+    ctx.fillRect(0, 0, LOW_W, LOW_H);
+  }
+  // A served ball crosses the middle of the table, so its numbers stand over
+  // the recorder, whose tape is rewinding to them, instead.
+  if (serve) drawText(ctx, value.toString(), 322, 100, PAL.text, { scale: 3, align: 'center', outline: PAL.void });
+  else drawText(ctx, value.toString(), LOW_W / 2, 84, PAL.text, { scale: 3, align: 'center', outline: PAL.void });
 }
 // ---------- Frame ----------
 export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
@@ -407,7 +419,7 @@ export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
     ctx.fillRect(0, 0, LOW_W, LOW_H);
   }
   if (frame.countdown !== null && frame.countdown > 0)
-    drawCountdown(ctx, frame.countdown);
+    drawCountdown(ctx, frame.countdown, frame.countdownServe);
   if (frame.hud)
     drawHud(ctx, frame.hud);
 }
