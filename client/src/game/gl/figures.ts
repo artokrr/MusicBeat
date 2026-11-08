@@ -1,3 +1,4 @@
+import { PREMIUM_LOOK } from '../scene/look';
 import { CapsuleGeometry, Color, DoubleSide, DynamicDrawUsage, Float32BufferAttribute, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, MeshDepthMaterial, Quaternion, RGBADepthPacking, SphereGeometry, Vector3, } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BONES } from '../rig/joints';
@@ -41,6 +42,16 @@ export class PrimitiveBatch {
     // Separate instanced and skinned shadow materials prevent Three's shared
     // depth material from rebuilding program parameters every object/frame.
     this.mesh.customDepthMaterial = capsule ? capsuleDepthMaterial() : new MeshDepthMaterial({ depthPacking: RGBADepthPacking });
+    if (PREMIUM_LOOK && !capsule) {
+      // Balls keep only the vertical height cue; other sphere instances cast.
+      this.mesh.customDepthMaterial.onBeforeCompile = shader => {
+        shader.vertexShader = 'attribute vec4 surface; varying float shadowKind;\n' + shader.vertexShader;
+        shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nshadowKind=surface.x;');
+        shader.fragmentShader = 'varying float shadowKind;\n' + shader.fragmentShader;
+        shader.fragmentShader = shader.fragmentShader.replace('void main() {', 'void main() { if(shadowKind==2.) discard;');
+      };
+      this.mesh.customDepthMaterial.customProgramCacheKey = () => 'height-cue-balls-v1';
+    }
     this.mesh.count = 0;
     scene.add(this.mesh);
   }

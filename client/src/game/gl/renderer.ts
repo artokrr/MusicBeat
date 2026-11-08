@@ -109,7 +109,7 @@ export class GLBackend implements SceneBackend {
     const moon = new DirectionalLight(0xffffff, 1);
     moon.position.set(-.45 * 12, .55 * 12, .7 * 12);
     moon.castShadow = true;
-    moon.shadow.mapSize.set(1024, 1024);
+    moon.shadow.mapSize.set(PREMIUM_LOOK ? 512 : 1024, PREMIUM_LOOK ? 512 : 1024);
     moon.shadow.camera.left = -8;
     moon.shadow.camera.right = 8;
     moon.shadow.camera.top = 8;
@@ -123,7 +123,7 @@ export class GLBackend implements SceneBackend {
     lamp.position.set(1.95, .35, 3.25);
     lamp.target.position.set(1.95, .35, 0);
     lamp.castShadow = true;
-    lamp.shadow.mapSize.set(1024, 1024);
+    lamp.shadow.mapSize.set(PREMIUM_LOOK ? 512 : 1024, PREMIUM_LOOK ? 512 : 1024);
     lamp.shadow.camera.near = .08;
     lamp.shadow.camera.far = 20;
     lamp.shadow.bias = -.0001;
@@ -213,6 +213,7 @@ export class GLBackend implements SceneBackend {
         contacts[i * 4] = b.pos[0];
         contacts[i * 4 + 1] = b.pos[1];
         contacts[i * 4 + 2] = Math.abs(b.pos[0]) <= TABLE_HALF_W && Math.abs(b.pos[1]) <= TABLE_HALF_L && b.pos[2] >= TABLE_Z ? TABLE_Z : 0;
+        contacts[i * 4 + 3] = Math.max(0, b.pos[2] - contacts[i * 4 + 2]);
       }
     }
     this.paddles.flush();

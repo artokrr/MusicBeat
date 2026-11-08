@@ -98,9 +98,9 @@ export class Renderer3D {
   readonly recvZ = new Float32Array(W * H);
   private readonly moonShadow = new Float32Array(W * H);
   private readonly lampShadow = new Float32Array(W * H);
+  private readonly ballShadow = new Float32Array(W * H);
   private readonly contactShadow = new Float32Array(W * H);
   private readonly lampWeight = new Float32Array(W * H);
-  private readonly shadowTint: RGB = [1, 1, 1];
   private readonly shadowPoint: Vec3 = [0, 0, 0];
   private readonly shadowUp: Vec3 = [0, 0, 1];
   private readonly shadow = new Uint8Array(W * H);
@@ -138,8 +138,8 @@ export class Renderer3D {
     if (PREMIUM_LOOK) for(let i=0;i<W*H;i++) {
       const p=this.unprojectGround(i%W+.5,Math.floor(i/W)+.5);
       const light=this.lightAt(p,this.shadowUp);
-      const lamp=Math.min(1,light[1]*1.35);
-      const sky=.25+.28*Math.max(0,dot(this.shadowUp,this.moon));
+      const lamp=Math.min(1,light[1]*1.05);
+      const sky=.19+.40*Math.max(0,dot(this.shadowUp,this.moon));
       this.lampWeight[i]=lamp/(sky+lamp);
     }
   }
@@ -339,14 +339,17 @@ export class Renderer3D {
   }
 
   /** A contact shadow straight below a point (for the ball over the table). */
-  dropShadow(x: number, y: number, surfaceZ: number, rad: number) {
-    this.markShadow(x, y, surfaceZ, rad, 2);
+  dropShadow(x: number, y: number, surfaceZ: number, rad: number, height?: number) {
+    if (PREMIUM_LOOK && height !== undefined) {
+      const t=clamp((height-.45)/1.35,0,1), fade=1-t*t*(3-2*t);
+      this.markShadow(x,y,surfaceZ,.038+Math.min(1,height/.8)*.014,2,3,.018,fade);
+    } else this.markShadow(x, y, surfaceZ, rad, 2);
   }
 
-  private markShadow(gx: number, gy: number, gz: number, rad: number, strength: 1 | 2, source = 0, penumbra = 0) {
+  private markShadow(gx: number, gy: number, gz: number, rad: number, strength: 1 | 2, source = 0, penumbra = 0, opacity = 1) {
     this.shadowPoint[0]=gx;this.shadowPoint[1]=gy;this.shadowPoint[2]=gz;
     const p = this.project(this.shadowPoint);
-    if (PREMIUM_LOOK) rad+=penumbra;
+    if (PREMIUM_LOOK && (source===1 || source===2)) rad+=penumbra;
     const rx = rad * this.S * 1.05;
     const ry = rx * Math.sin(this.pitch) + 0.5;
     const y0 = Math.max(0, Math.floor(p.sy - ry));
@@ -362,8 +365,8 @@ export class Renderer3D {
         if (PREMIUM_LOOK) {
           const r=Math.sqrt(dx*dx+dy*dy), edge=Math.min(.85,penumbra/Math.max(.01,rad));
           const coverage=edge>0?Math.min(1,(1-r)/edge):1;
-          const target=source===1?this.moonShadow:source===2?this.lampShadow:this.contactShadow;
-          target[i]=Math.max(target[i],coverage);
+          const target=source===1?this.moonShadow:source===2?this.lampShadow:source===3?this.ballShadow:this.contactShadow;
+          target[i]=Math.max(target[i],coverage*opacity);
         }
         if (this.shadow[i]! < strength) this.shadow[i] = strength;
       }
@@ -377,23 +380,28 @@ export class Renderer3D {
       if (!s) continue;
       this.shadow[i] = 0;
       if (this.recvZ[i] === -Infinity || this.zb[i] !== this.recvZ[i]) {
-        if(PREMIUM_LOOK) this.moonShadow[i]=this.lampShadow[i]=this.contactShadow[i]=0;
+        if(PREMIUM_LOOK) this.moonShadow[i]=this.lampShadow[i]=this.contactShadow[i]=this.ballShadow[i]=0;
         continue;
       }
       if (PREMIUM_LOOK) {
         const d=bayer(i%W,Math.floor(i/W));
         const moon=Math.floor(this.moonShadow[i]*3+d)/3;
         const lamp=Math.floor(this.lampShadow[i]*3+d)/3;
-        const contact=this.contactShadow[i];
-        this.moonShadow[i]=this.lampShadow[i]=this.contactShadow[i]=0;
+        const ball=this.ballShadow[i];
+        const contact=Math.max(ball,this.contactShadow[i]);
+        this.moonShadow[i]=this.lampShadow[i]=this.contactShadow[i]=this.ballShadow[i]=0;
         const w=this.lampWeight[i];
         // CPU retains baked RGB; approximate independent energy loss rather
         // than applying the old equally strong tint to both lights.
-        const loss=moon*.22*(1-w)+lamp*w*.85+contact*.25;
-        this.shadowTint[0]=1-loss-lamp*w*.12;
-        this.shadowTint[1]=1-loss-lamp*w*.06;
-        this.shadowTint[2]=1-loss*.85;
-        this.tint(i,this.shadowTint);continue;
+        const loss=Math.min(.85,moon*.55*(1-w)+lamp*w*.75+contact*.30);
+        const j=i*4, r=this.pix[j], g=this.pix[j+1], b=this.pix[j+2];
+        const Y=.2126*r+.7152*g+.0722*b;
+        // Baked receiver approximation: lower energy and desaturate its hue.
+        const chroma=ball>0?0:1-Math.max(moon,lamp,contact)*.65;
+        this.pix[j]=(Y+(r-Y)*chroma)*(1-loss);
+        this.pix[j+1]=(Y+(g-Y)*chroma)*(1-loss);
+        this.pix[j+2]=(Y+(b-Y)*chroma)*(1-loss);
+        continue;
       }
       if (s === 1 && bayer(i % W, (i / W) | 0) > 0.5) this.tint(i, SHADOW_SOFT);
       else this.tint(i, SHADOW_HARD);
