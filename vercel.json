@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm ci --workspace=client --include-workspace-root",
+  "buildCommand": "VITE_SHARE_LINKS=off npm run build:client",
+  "outputDirectory": "client/dist",
+  "framework": null,
+  "headers": [
+    { "source": "/models/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800" }] },
+    { "source": "/sfx/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800" }] },
+    { "source": "/assets/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] }
+  ]
+}

@@ -13,6 +13,8 @@ import SceneBackdrop from './SceneBackdrop';
 import type { ChangeEvent } from 'react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
+/** Share links need the run server. A static build (e.g. Vercel) sets VITE_SHARE_LINKS=off and hides them. */
+const SHARE_LINKS = import.meta.env.VITE_SHARE_LINKS !== 'off';
 
 interface ApiErrorPayload {
   error?: string;
@@ -338,9 +340,11 @@ export default function ResultsScreen() {
         ) : null}
 
         <div style={styles.actions}>
-          <button className="px-option" onClick={handleShare} disabled={shareStatus === 'saving'}>
-            <PxText text={shareStatus === 'saving' ? 'saving…' : 'share link'} />
-          </button>
+          {SHARE_LINKS && (
+            <button className="px-option" onClick={handleShare} disabled={shareStatus === 'saving'}>
+              <PxText text={shareStatus === 'saving' ? 'saving…' : 'share link'} />
+            </button>
+          )}
           <button className="px-option" onClick={handleDownloadCard}>
             <PxText text="save card" />
           </button>
