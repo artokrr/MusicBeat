@@ -1,10 +1,11 @@
 // Real upload, native-resolution screencast and in-page-only mixed audio.
 // node tools/cassette-sequence.mjs [--cpu] [--slow-analysis]
-// Requires the worktree's Vite on 3130. Own muted headless Chrome, CDP 9435.
+// Requires the worktree's Vite on 3150. Own muted headless Chrome, CDP 9462.
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 const cpu=process.argv.includes('--cpu'),slow=process.argv.includes('--slow-analysis');
+const port=cpu?9465:9462;
 const prefix=cpu?'cassette-cpu':slow?'cassette-slow':'cassette';
 const out=resolve('tools/out'),framesDir=resolve(out,prefix+'-frames');
 mkdirSync(framesDir,{recursive:true});
@@ -12,12 +13,12 @@ const profile=mkdtempSync(resolve(out,'cassette-chrome-'));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const chrome=spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',[
  '--headless=new','--mute-audio','--no-first-run','--no-default-browser-check',
- '--autoplay-policy=no-user-gesture-required','--remote-debugging-port=9435',
+ '--autoplay-policy=no-user-gesture-required',`--remote-debugging-port=${port}`,
  `--user-data-dir=${profile}`,'--window-size=1152,648','about:blank'],{stdio:'ignore'});
 let ws;
 try {
  let page;
- for(let i=0;i<75&&!page;i++){await sleep(200);try{page=(await(await fetch('http://127.0.0.1:9435/json/list')).json()).find(p=>p.type==='page')}catch{}}
+ for(let i=0;i<75&&!page;i++){await sleep(200);try{page=(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(p=>p.type==='page')}catch{}}
  if(!page)throw Error('Chrome did not start');
  ws=new WebSocket(page.webSocketDebuggerUrl);await new Promise(r=>ws.onopen=r);
  let id=0;const pending=new Map(),frames=[],errors=[];
@@ -63,7 +64,7 @@ try {
    window.__capture.audioStart=Date.now()/1000;rec.start();
   };
  `});
- await send('Page.navigate',{url:`http://localhost:3130/${cpu?'?renderer=cpu':''}`});
+ await send('Page.navigate',{url:`http://localhost:3150/${cpu?'?renderer=cpu':''}`});
  await sleep(2800);
  console.log('bot',await evaluate(readFileSync('tools/gl-bot.js','utf8')));
  await evaluate(`(async()=>{
@@ -73,7 +74,12 @@ try {
   const upload=await(await fetch('/src/components/UploadScreen.tsx')).text();
   const recorderURL=upload.match(/from "(\\/src\\/game\\/anim\\/recorder\\.ts[^"]*)"/)[1];
   const {recorder}=await import(recorderURL);window.__store=store;window.__recorder=recorder;
-  const capture=()=>{const s=store.getState(),r=recorder;window.__capture.events.push({ms:performance.now(),epoch:Date.now()/1000,screen:s.screen,phase:s.phase,inserting:r.inserting,loaded:r.loaded,key:r.key,reel:r.reel,door:r.door,oldVisible:r.oldVisible,x:r.tapeX,y:r.tapeY,z:r.tapeZ});if(!window.__capture.done)requestAnimationFrame(capture)};capture();
+  const backendName=${cpu?"'CPUBackend'":"'GLBackend'"};
+  const backendPath=${cpu?"'/src/game/scene/cpu.ts'":"'/src/game/gl/renderer.ts'"};
+  const module=await import(performance.getEntriesByType('resource').find(r=>r.name.includes(backendPath)).name);
+  const proto=module[backendName].prototype,render=proto.render;
+  proto.render=function(f){window.__notesPool=this.musicNotes.pool;proto.render=render;return render.call(this,f)};
+  const capture=()=>{const s=store.getState(),r=recorder;window.__capture.events.push({ms:performance.now(),epoch:Date.now()/1000,screen:s.screen,phase:s.phase,inserting:r.inserting,loaded:r.loaded,key:r.key,reel:r.reel,door:r.door,oldVisible:r.oldVisible,x:r.tapeX,y:r.tapeY,z:r.tapeZ,notes:window.__notesPool?Array.from(window.__notesPool.opacity):[],noteZ:window.__notesPool?Array.from(window.__notesPool.positions):[]});if(!window.__capture.done)requestAnimationFrame(capture)};capture();
  })()`);
  await evaluate('__startAudio()');
  await send('Page.startScreencast',{format:'png',maxWidth:384,maxHeight:216,everyNthFrame:1});
@@ -82,7 +88,7 @@ try {
  const {root}=await send('DOM.getDocument');
  const {nodeId}=await send('DOM.querySelector',{nodeId:root.nodeId,selector:'input[type=file]'});
  await send('DOM.setFileInputFiles',{nodeId,files:['/Users/artem/Downloads/Night, Blooming Jasmine.mp3']});
- for(let i=0;i<160;i++){await sleep(100);if(await evaluate('window.__bot.elapsed>=8.2'))break;}
+ for(let i=0;i<400;i++){await sleep(100);if(await evaluate('window.__bot.elapsed>=22'))break;}
  await send('Page.stopScreencast');
  const audio=await evaluate('__stopAudio()');
  writeFileSync(resolve(out,prefix+'-audio.webm'),Buffer.from(audio.split(',')[1],'base64'));
@@ -91,6 +97,8 @@ try {
  const ev=result.events,accepted=ev.find(e=>e.inserting),seated=ev.find(e=>e.loaded&&e.ms>selected),playing=ev.find(e=>e.phase==='playing');
  result.summary={renderer:cpu?'cpu':'gl',frameCount:frames.length,meanFps:(frames.length-1)/(frames.at(-1).time-frames[0].time),flightMs:seated.ms-accepted.ms,firstPlayingMs:playing.ms-selected,workerStartMs:result.workers[0].start-selected,workerEndMs:result.workers[0].end-selected,playKey:playing.key,reelsMoved:ev.at(-1).reel!==playing.reel,errors:errors.length};
  const checks=[];
+ if(!ev.some(e=>e.notes.some(a=>a>0)))checks.push('No music notes during playback');
+ if(ev.some(e=>e.phase!=='playing'&&e.notes.some(a=>a>0)))checks.push('Music notes outside playback');
  if(result.summary.flightMs<1400||result.summary.flightMs>1520)checks.push('Flight duration outside tolerance');
  if(result.workers[0].start>=seated.ms)checks.push('Preparation did not start in parallel');
  if(playing.ms<seated.ms+2900)checks.push('Countdown shortened');
@@ -100,11 +108,12 @@ try {
  // Record pause/resume through the real Escape input after the video ends.
  const key=()=>send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
  await key();await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await sleep(80);
- const paused=await evaluate('({phase:__store.getState().phase,reel:__recorder.reel,key:__recorder.key})');await sleep(400);
+ const paused=await evaluate('({phase:__store.getState().phase,reel:__recorder.reel,key:__recorder.key,notes:Array.from(__notesPool.opacity)})');await sleep(400);
+ const pauseShot=await send('Page.captureScreenshot',{format:'png'});writeFileSync(resolve(out,prefix+'-pause-native.png'),Buffer.from(pauseShot.data,'base64'));
  const held=await evaluate('__recorder.reel');
  await key();await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await sleep(400);
- const resumed=await evaluate('({phase:__store.getState().phase,reel:__recorder.reel,key:__recorder.key})');
- result.pause={paused,held,resumed};if(paused.phase!=='paused'||paused.reel!==held||resumed.key!==1||resumed.reel===held)checks.push('Pause/resume failed');
+ const resumed=await evaluate('({phase:__store.getState().phase,reel:__recorder.reel,key:__recorder.key,notes:Array.from(__notesPool.opacity)})');
+ result.pause={paused,held,resumed};if(paused.notes.some(a=>a>0))checks.push('Music notes remained on pause');if(paused.phase!=='paused'||paused.reel!==held||resumed.key!==1||resumed.reel===held)checks.push('Pause/resume failed');
  // A second accepted file uses the existing loaded deck: quit via the real
  // pause menu, select the same file again, and observe the old tape on snow.
  await key();await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await sleep(80);
@@ -115,11 +124,18 @@ try {
  await send('DOM.setFileInputFiles',{nodeId:nextInput.nodeId,files:['/Users/artem/Downloads/Night, Blooming Jasmine.mp3']});
  await sleep(560);
  result.replacement=await evaluate('({oldVisible:__recorder.oldVisible,oldZ:__recorder.oldZ,inserting:__recorder.inserting,loaded:__recorder.loaded})');
- if(!result.replacement.oldVisible||!result.replacement.inserting||result.replacement.oldZ>.02)checks.push('Replacement did not eject the old tape first');
+ if(!result.replacement.oldVisible||!result.replacement.inserting||result.replacement.oldZ>.03)checks.push('Replacement did not eject the old tape first');
  const ejectShot=await send('Page.captureScreenshot',{format:'png'});writeFileSync(resolve(out,prefix+'-eject-native.png'),Buffer.from(ejectShot.data,'base64'));
  await sleep(1000);
  result.replacement.seated=await evaluate('__recorder.loaded && !__recorder.inserting');
  if(!result.replacement.seated)checks.push('Replacement did not seat');
+ // Stop returning balls through the actual input path and observe the failure fade.
+ await evaluate(`window.addEventListener('keydown',e=>{if(e.code.startsWith('Arrow'))e.stopImmediatePropagation()},true)`);
+ for(let i=0;i<200;i++){await sleep(100);if(await evaluate('__store.getState().phase==="ended"'))break;}
+ await sleep(60);
+ result.failure=await evaluate('({phase:__store.getState().phase,outcome:__store.getState().runOutcome,playing:__recorder.playing,notes:Array.from(__notesPool.opacity)})');
+ if(result.failure.phase!=='ended'||result.failure.playing||result.failure.notes.some(a=>a>0))checks.push('Failure did not stop music notes');
+ const failShot=await send('Page.captureScreenshot',{format:'png'});writeFileSync(resolve(out,prefix+'-failure-native.png'),Buffer.from(failShot.data,'base64'));
  writeFileSync(resolve(out,prefix+'-sequence.json'),JSON.stringify(result,null,2));
  const start=frames[0].time;
  const concat=frames.map((f,i)=>`file '${f.name}'\nduration ${i+1<frames.length?Math.max(.001,frames[i+1].time-f.time):1/60}\n`).join('')+`file '${frames.at(-1).name}'\n`;
@@ -133,7 +149,7 @@ try {
   ff(['-i',f.name,'-vf',`${crop?`crop=${crop},`:''}scale=iw*3:ih*3:flags=neighbor`,'-frames:v','1',resolve(out,prefix+'-'+name+'.png')]);
  };
  still('upload',accepted.epoch-.25);still('mid-flight',accepted.epoch+.46);still('gameplay',playing.epoch+6);
- still('recorder-close',playing.epoch+6,'28:22:276:157');
+ still('recorder-close',playing.epoch+6,'36:32:288:153');
  console.log(JSON.stringify({summary:result.summary,pause:result.pause,failures:checks,video:resolve(out,prefix+'-sequence.mp4')},null,2));
  if(checks.length)process.exitCode=1;
 } finally {ws?.close();chrome.kill();await sleep(400);rmSync(profile,{recursive:true,force:true});}

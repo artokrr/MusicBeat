@@ -165,9 +165,9 @@ advisory. The existing React countdown-render warning is unrelated to this work.
 
 ## Cassette recorder
 
-The unbranded recorder sits at `(2, -1.6, 0)`, right of the near table corner.
-Its 36 cm body projects to about 16 pixels; the handle rises above the silver
-speaker grille and dark cassette window. This placement clears the upload
+The unbranded recorder sits at `(2.35, -1.85, 0)`, right of the near table corner.
+Its 54 cm body projects to about 25 pixels; the raised handle, three grille
+slats, ivory keys and exposed cassette reels survive native resolution. This placement clears the upload
 panel, bottom HUD, table, and player movement. There is no emissive indicator.
 
 `cassette_recorder.glb` is baked into the same static courtyard draw. The door,
@@ -192,17 +192,23 @@ shape and CPU projection buffers are allocated once; the update code creates
 no arrays, objects, vectors or geometries. As with Three's other draws, this is
 not a claim of zero V8/runtime allocation; inspect the CDP report.
 
-Reproduce with Vite on 3130 and muted headless Chrome only:
+Reproduce this revision with Vite on 3150 and muted headless Chrome only:
 
 ```sh
-node tools/cassette-check.mjs
 node tools/cassette-sequence.mjs
 node tools/cassette-sequence.mjs --cpu
-node tools/cassette-sequence.mjs --slow-analysis
-node tools/cassette-profile.mjs
-node tools/shot.mjs --url http://localhost:3130/ --port 9434 --out tools/out/cassette-detail.png --after tools/cassette-visual.js
-node tools/shot.mjs --url http://localhost:3130/ --port 9438 --out tools/out/cassette-errors.png --after tools/cassette-errors.js
+node tools/shot.mjs --url http://localhost:3150/ --port 9461 --out tools/out/recorder-full.png --eval tools/gl-bot.js --song "/Users/artem/Downloads/Night, Blooming Jasmine.mp3" --play 1000 --verify true --timeline true
+node tools/shot.mjs --url http://localhost:3150/ --port 9464 --out tools/out/recorder-allocation.png --eval tools/gl-bot.js --song "/Users/artem/Downloads/Night, Blooming Jasmine.mp3" --warmup 12000 --play 16000 --heap true --after tools/recorder-checks.js
+python3 tools/recorder-artifacts.py
 ```
+
+`scene/recorder-notes.ts` owns a two-slot, typed-buffer plume shared by GL and
+CPU. Beatmap onsets trigger a seeded selection with a 0.65–1.30 second gap;
+notes live 1.65 seconds, rise 27 cm and drift a few centimetres left. Three- and
+five-pixel-wide quavers use a five-pixel height, the existing Bayer dissolve,
+muted cream-grey ink and grille lighting/haze. They write into the scene depth
+buffer, never an overlay. Pause, countdown, menus and failure clear the pool.
+Only the recorder emits these glyphs; the stranger remains untouched.
 
 The sequence runner uses the real file input and Escape/quit controls. It checks
 seating/countdown order, worker overlap, PLAY, pause/resume and replacement. It
@@ -211,7 +217,8 @@ neighbour. Web Audio destinations are diverted to in-page MediaStreams for the
 recording; Chrome also has `--mute-audio`. PNGs, MP4s and JSON reports live in
 ignored `tools/out/`. Each runner closes its own Chrome; stop Vite separately.
 
-The cassette pass's local verification completed 388/388 perfects with no
+Historical first-recorder baseline (before the readability/note revision below):
+the cassette pass's local verification completed 388/388 perfects with no
 bad judgements. A 30-second real-song CDP sample (1,800 frames, 1× CPU) measured
 the complete main-thread render callback at 0.60/1.50 ms median/p95 before and
 0.70/1.60 ms after, with zero React commits in either window. The courtyard now
@@ -223,3 +230,5 @@ presentation-clock/GL wrapper paths, attributable to runtime numeric handling.
 Treat the fixed-storage rule as no explicit per-frame allocations, not a
 whole-engine zero-heap guarantee. See `tools/out/cassette-validation.json` and
 `cassette-heap-summary.json` for the measurements and their limits.
+
+For current revision evidence and limitations, see `tools/RECORDER-V2.md`.

@@ -15,7 +15,7 @@
 //     [--page true]          screenshot the whole page (HTML included) instead of the canvas
 //     [--chrome-args "--disable-webgl"]  extra Chrome flags, space-separated
 //
-// The page's audio is not muted: run with the game volume down if needed.
+// Chrome is always muted; capture audio only inside the page.
 
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -95,6 +95,8 @@ try {
       await sleep(250);
       if (await evaluate(`!!document.querySelector('button[aria-label="Pause"]')`)) break;
     }
+    if (args.warmup) await sleep(Number(args.warmup));
+    if (args.heap === 'true') await send('HeapProfiler.startSampling', { samplingInterval: 512, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
     await sleep(Number(args.play ?? 6000));
   }
 
@@ -118,6 +120,10 @@ try {
     console.log('wrote', file);
     if (k < frames - 1) await sleep(every);
   }
+  if (args.heap === 'true') {
+    const heap = await send('HeapProfiler.stopSampling');
+    writeFileSync(out.replace(/\.png$/, '-heap.json'), JSON.stringify(heap));
+  }
   if (args.after) {
     const result = await evaluate(readFileSync(args.after, 'utf8'));
     for (const file of result.files ?? []) {
@@ -129,6 +135,10 @@ try {
   }
   if (args.verify === 'true') {
     for (let i = 0; i < 1800; i++) {
+      if (args.timeline === 'true' && i % 40 === 0) {
+        const { data } = await send('Page.captureScreenshot', { format: 'png' });
+        writeFileSync(out.replace(/\.png$/, `-song-${String(i / 40).padStart(2, '0')}.png`), Buffer.from(data, 'base64'));
+      }
       const bot = await evaluate('window.__bot');
       if (!bot) throw new Error('--verify needs --eval tools/gl-bot.js');
       if (i % 80 === 0) console.log('bot:', JSON.stringify(bot));
