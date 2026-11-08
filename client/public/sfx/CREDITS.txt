@@ -10,4 +10,17 @@ floor-1.wav
 drop.mp3
   "Dropping ping pong ball on table 2" by giddster: https://freesound.org/people/giddster/sounds/414461/
 
+cassette-door-open.wav, cassette-seat.wav, cassette-play.wav
+  "cassette tape action 2.wav" by cognito perceptu: https://freesound.org/people/cognito%20perceptu/sounds/98329/
+cassette-door-shut.wav
+  "cassette tape deck slot open close hard nice spring various and spinout end.flac" by kyles: https://freesound.org/people/kyles/sounds/635487/
+cassette-eject.wav
+  "Cassette Player Ejecting.wav" by jpkweli: https://freesound.org/people/jpkweli/sounds/154756/
+cassette-snow.wav
+  "snow block of snow igloo brick put down crunch or hit or pat (works at low level).wav" by kyles: https://freesound.org/people/kyles/sounds/450848/
+cassette-stop.wav
+  "Soft Mechanical Whirring from Tape Player Motor" by horraceradishh: https://freesound.org/people/horraceradishh/sounds/734566/
+
 Edits: high-passed (120-150 Hz), trimmed to start 1 ms before the attack, faded out, loudness-matched within each set.
+The cassette-* takes are cut the same way (high-passed 60-150 Hz, mono, 32 kHz, peak-normalised) by
+tools/cassette-sfx-build.sh. The flying tape's whoosh and the low knock under the seat clack are synthesized.

@@ -123,10 +123,26 @@ export function roomImpulse(sampleRate: number, channel: number): Float32Array {
   return out;
 }
 
-/** Dry plastic latch and spring, deliberately much quieter than a paddle hit. */
-export function cassetteClick(sampleRate: number): Float32Array {
-  const rnd = noise(81);
-  return render(sampleRate, .065, t =>
-    rnd() * Math.exp(-t / .003) + .35 * Math.sin(TAU * 270 * t) * Math.exp(-t / .014)
-    + (t > .021 ? .23 * rnd() * Math.exp(-(t-.021)/.004) : 0), .55);
+/** Soft, slightly dark noise for air moving past: shaped live by the filters that follow it. */
+export function airNoise(sampleRate: number, seconds: number): Float32Array {
+  const rnd = noise(311);
+  // Paul Kellet's economy pink filter: falls ~3 dB per octave, like real air.
+  let b0 = 0, b1 = 0, b2 = 0;
+  return render(sampleRate, seconds, () => {
+    const w = rnd();
+    b0 = 0.99765 * b0 + w * 0.099046;
+    b1 = 0.963 * b1 + w * 0.2965164;
+    b2 = 0.57 * b2 + w * 1.0526913;
+    return b0 + b1 + b2 + w * 0.1848;
+  }, 0.9);
+}
+
+/** The body of a tape dropping into its slot: a short low knock under the recorded plastic clack. */
+export function cassetteThump(sampleRate: number): Float32Array {
+  return render(sampleRate, 0.09, (t) => {
+    const attack = Math.min(1, t / 0.0015);
+    const body = Math.sin(TAU * (150 * t - 300 * t * t)) * decay(t, 0.018);
+    const knock = 0.3 * Math.sin(TAU * 330 * t) * decay(t, 0.006);
+    return attack * (body + knock);
+  });
 }

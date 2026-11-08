@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
 
+import { cassette } from '../audio/cassetteSfx';
 import { prepareUpload } from '../audio/songUpload';
 import { sfx } from '../audio/sfx';
-import { insertCassette } from '../game/anim/recorder';
+import { insertCassette, recorder } from '../game/anim/recorder';
 import { at, u } from '../game/pixel/layout';
 import PxText from '../game/pixel/PxText';
 import { LOW_W } from '../game/pixel/stage';
@@ -34,6 +35,7 @@ export default function UploadScreen() {
     accepted.current = true;
     sfx.unlock();
     insertCassette(performance.now());
+    cassette.insert(recorder.startedMs, recorder.oldVisible);
     prepareUpload(file);
     resetScore();
     setPhase('countdown');
