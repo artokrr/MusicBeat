@@ -65,3 +65,9 @@ export function rendererDiagnostics() {
 export function disposeRenderer() { generation++; backend?.dispose(); software?.dispose(); backend = null; software = null; loading = null; }
 if (import.meta.hot)
   import.meta.hot.dispose(disposeRenderer);
+
+/** Do not spend the opening hold looking at temporary procedural assets. */
+export function openingReady(): boolean {
+  const renderer = activeBackend();
+  return !!renderer && (renderer.kind === 'cpu' || (renderer as GLBackend).props.status !== 'loading');
+}

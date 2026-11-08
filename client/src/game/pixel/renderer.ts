@@ -185,6 +185,7 @@ function noteToBall(note: NoteView, frame: FrameState, out: BallView): boolean {
 }
 /** Compute once, consume synchronously. Exported for deterministic backend comparisons. */
 export function describeFrame(frame: FrameState): SceneFrame {
+  sceneFrame.introProgress = undefined;
   sampleRecorder(frame.nowMs);
   sceneFrame.timeMs = frame.nowMs;
   sceneFrame.playerStrokeMs = frame.pressedLane === null ? -Infinity : frame.nowMs - frame.pressAgeMs;
@@ -427,7 +428,9 @@ export function renderFrame(ctx: CanvasRenderingContext2D, frame: FrameState) {
 export function renderIdleScene(ctx: CanvasRenderingContext2D, nowMs: number, dt: number, options: {
   withPlayer?: boolean;
   flicker?: boolean;
+  introProgress?: number;
 } = {}) {
+  sceneFrame.introProgress = options.introProgress;
   sampleRecorder(nowMs);
   sceneFrame.timeMs = nowMs;
   sceneFrame.playerStrokeMs = -Infinity;
