@@ -215,3 +215,158 @@ Both GL runs: 45 draws, 20 geometries, 10 textures, stable resources and GL erro
 retuned capture measured 1.145 ms); report the final run rather than select the
 fastest one. Detailed results: `out/look2-perf-{old,retuned}/capture-checks.json`
 and `out/look2-perf-cpu-{old,retuned}/capture-checks.json`.
+
+## Third pass: quiet ball cues, textured pool, moonlit form
+
+Artem sees a smaller, textured warm pool, compact neutral ball cues instead of
+moving yellow blobs, and darker bench/tree/character/table shadow masses. The
+lamppost streaks lose their amber saturation. The hood exclusion remains intact.
+The building edge gets a soft ground-value band, **not** a new full-building
+shadow-map caster (that would cover most of this courtyard).
+
+Implementation commits: `f7ac590`, then `8ffe8c4` (skip ball falloff math
+outside the cue footprint; eight native frames remain pixel-identical). All changes are gated by the existing new-look
+path; the old path's inputs and rendering operations stay intact.
+
+Knobs, relative to 573b8f1:
+
+- Snow sky fill .25 -> .19; directional moon .28 -> .40. Snow variation around
+  the existing palette is amplified 1.2x. The far-wall band reaches 18% at y=4.6.
+- Sodium multiplier 1.35 -> 1.05; snow RGB contribution (1.25,1.05,.75) ->
+  (.85,.68,.43). Highlight shoulder .85/.30 -> .65/.65. This preserves grain
+  through the centre instead of clipping it before depth haze.
+- Shadow visibility still removes each light's own energy. After footprint wear,
+  contact and haze, snow shadow luminance is retained but chroma is limited to
+  55% of the corresponding unoccluded receiver. This is a display-RGB art
+  constraint, not a claim of physically exact spectral lighting. In particular,
+  cool receivers may become less blue; they must not gain warm excess or saturation.
+- Ball kind 2 no longer casts into either GL shadow map. The vertical cue uses
+  radius .038 -> .052 m over the first .8 m height, a soft edge and 30% peak loss.
+  It fades between .45 and 1.8 m above its receiver. Its RGB ratio is
+  (.985,.995,1). Table and snow receive the same cue. Old balls retain all their
+  historical shadows.
+- New shadow maps: 512 instead of 1024; five taps instead of nine, retaining the
+  same UV penumbra extent. Eight volume slices instead of twelve, density .018
+  instead of .024. No added draw calls. Pane halation stays unchanged.
+- CPU: corresponding snow knobs, stronger moon loss .22 -> .55, lamp loss
+  .85 -> .75, neutral ball cues with height fade. Desaturation is applied to the
+  actual baked receiver; neutral haze avoids adding blue saturation back into
+  dark shadows. CPU remains an approximation with soft stamps, not GL parity.
+  One extra reusable 384x216 Float32 ball mask costs 324 KiB; no new per-frame
+  mask allocations.
+
+Fixed native frame 150, all display RGB Y = .2126R+.7152G+.0722B, range 0..255:
+
+| Measurement | Old | 573b8f1 default | New |
+| --- | ---: | ---: | ---: |
+| Pool mean / peak | 229.69 / 241.86 | 237.77 / 245.93 | 188.37 / 229.61 |
+| Clipped pool pixels before haze | 3192 | 3418 | 3 |
+| Courtyard mean | 148.80 | 105.18 | 109.39 |
+| Far courtyard mean | 104.73 | 80.40 | 76.23 |
+| Bench moon shadow / equivalent lit snow | 103.63 / 141.58 | 62.17 / 99.95 | 49.01 / 102.46 |
+| Moon-shadow value loss | 37.95 | 37.78 | 53.45 |
+| Low pool-ball cue: pixels / mean loss | 20 / 79.04 | 20 / 74.76 | 8 / 34.14 |
+| Pool-ball cue bounding box | 6x4 | 6x4 | 4x2 |
+| Cue at 2.5 m height, pixels | 20 | 20 | 0 |
+| Snow shadow warmer / more saturated samples | 994 / 13843 | 2084 / 9926 | 0 / 0 |
+
+The three clipped pixels are isolated glints; there is no large clipped pool.
+The comparison sheet includes balls in the pinned gameplay pose and a separate
+controlled low ball in the pool crop. Ball counts above measure the vertical cue
+only; the old/current extra light-projected ball shadows also disappear in new.
+Moon contrast is measured at the bench away from sodium, not the lamp-lit table
+edge. The table's leftward shadow is still weak in sodium; the large foreground
+and bench/tree masses supply most of the restored form.
+
+Colour regression checks compare rendered snow to the identical pixel with
+visibility forced to one (same pose, texture, clocks). They then independently
+compare nearby unshadowed pixels within 12 pixels, matching unoccluded RGB
+exactly so texture or lamp falloff cannot masquerade as shadow colour.
+Saturation=(max-min)/max, warm excess=max(0,R-B)/Y; tolerances .02 for chroma and
+2 RGB luminance bytes. These are rendered receiver tests, not a universal proof
+for every material/camera. New: 12,949 causal pixels and 5,012 adjacent pairs,
+zero brighter/warmer/more-saturated failures. CPU: 22,341 changed receiver pixels,
+zero failures. The same test deliberately detects the defect in both baselines.
+
+Evidence under ignored `tools/out/`:
+
+- `look3-three-way.png`: old | 573b8f1 | new at 4x, with native and 2x crops.
+- `look3-before-after.mp4`: 573b8f1 | new, 2304x648, 60 fps, 15.03 s.
+- `look3-1080p.mp4`: new, 1920x1080, 60 fps, same in-page audio.
+- `look3-cpu.png`, `look3-motion-sheet.png`: CPU and sampled native video review.
+- `look3-metrics.json`, `look3-old-parity.json`, `look3-artifacts.log`.
+- `look3-{current,new,old}/capture-checks.json`: renderer cost and resources.
+- `look3-video-metadata.json`, `look3-native-video-metadata.json`,
+  `look3-audio-check.log`: encoded dimensions/rate and non-silent audio.
+
+The native recording contains 895 video frames in 14.997 s (59.68 fps average);
+exports are CFR 60. Audio is intercepted into MediaStream destinations, never
+sent to speakers, and Chrome is always `--headless=new --mute-audio`.
+Native stills and sampled motion frames were inspected. Subjective real-speed
+playback judgment remains for Artem; no audible playback was performed.
+
+Reproduction (Vite 3230 already running, linked node_modules, never install):
+
+```sh
+node tools/look3-baseline.mjs
+# Before implementation, look2-checks.js / look2-cpu-checks.js saved the
+# look3-base-old, look3-base-old-cpu, look3-current and look3-current-cpu fixtures.
+# Current baseline GL can also be reconstructed without modifying any source:
+node tools/shot.mjs --url 'http://localhost:3230/?nointro&probeBaseline' --out tools/out/look3-replay/capture.png --after tools/look3-checks.js --port 9531
+# Capture final fixed frames/perf into look3-new and look3-old:
+node tools/shot.mjs --url 'http://localhost:3230/?nointro' --out tools/out/look3-new/capture.png --after tools/look3-checks.js --port 9531
+# For probes use look3-probes.js (GL) or look3-cpu-probes.js (CPU).
+# URL probeBaseline restores 573b8f1 shaders and ball casters, look=old selects old.
+python3 tools/look3-artifacts.py
+node tools/look3-video.mjs
+```
+
+Remaining taste controls: moon/fill balance, the .55 snow-shadow chroma cap,
+ball .30 strength / 1.8 m fade end, and pool vector/shoulder. The distant building
+band and CPU neutral haze are deliberately cheap approximations. Desktop timing
+is not a weak-device guarantee; avoid promising a speedup from a single p95.
+
+
+Final isolated sequential desktop measurements, Apple M3 Max / Chrome ANGLE Metal.
+Each GL capture: 60 warmup + 240 submissions, 239 completed GPU queries. CPU:
+180 samples after 60 warmup. Current default uses the verified 573b8f1 shader/map
+reconstruction; the new column is the final bounds-check optimization.
+
+| Cost, ms median / p95 | Old | 573b8f1 default | New |
+| --- | ---: | ---: | ---: |
+| GPU execution | .369 / 1.024 | .498 / 1.169 | .430 / .932 |
+| GL main-thread submission | .900 / 1.700 | 1.100 / 1.800 | 1.000 / 2.100 |
+| Submission + Canvas2D copy | 1.000 / 1.800 | 1.200 / 2.000 | 1.100 / 2.200 |
+| CPU fallback | 1.000 / 1.300 | 1.200 / 1.600 | 1.400 / 1.800 |
+
+CPU current-default numbers are the pre-edit capture, not the final sweep.
+GPU p95 is below the previous ~2.5 ms observation, but JS and CPU fallback did
+not improve. Before the ball bounds check the same sweep measured new GPU
+1.049 / 1.843; earlier captures ranged up to 2.58 ms p95. Keep the variation in
+mind instead of treating these desktop runs as a guaranteed weak-device gain.
+All GL captures retained 45 draws, 20 geometries, 10 textures, stable resources,
+and GL error 0. Detailed final files: `look3-perf-old`, `look3-replay`,
+`look3-perf-optimized`, `look3-perf-old-cpu`, `look3-perf-new-cpu` under `out/`.
+
+Validation: TypeScript clean; Vite production build passed (existing chunk-size
+advisory). Old parity: 8 GL + 8 CPU frames have zero changed pixels relative to
+573b8f1. Reconstructed movie baseline: 8 frames also match the pre-edit default
+exactly. The final bounds optimization changes zero pixels in 8 new-look frames,
+so the delivered videos and crops also represent the final look. Automatic CPU
+fallback with `--disable-webgl` rendered gameplay (`look3-auto-cpu.png`); its log
+contains expected WebGL-disabled errors. `look3-baseline-parity.json` and
+`look3-optimization-parity.json` preserve the additional comparisons.
+
+Final-song gate (on the final optimized implementation):
+
+```sh
+node tools/shot.mjs --url 'http://localhost:3230/?nointro' --out tools/out/look3-full.png --eval tools/gl-bot.js --song '/Users/artem/Downloads/Night, Blooming Jasmine.mp3' --play 1000 --verify true --port 9531
+```
+
+The earlier pre-optimization run also completed 393 perfect. An initial run
+stalled at 60 s without misses while other validation was ongoing; it is retained
+as `look3-bot.log`, excluded from completion evidence, and was rerun in isolation.
+
+Final optimized song result: completed, 393/393 perfect, max combo 393, zero
+good/ok/miss and no bot failures. Evidence: `look3-full-playthrough.json` and
+`look3-bot-final.log`. All task-owned Chrome instances and Vite were stopped.
