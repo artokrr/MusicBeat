@@ -10,7 +10,8 @@ floor-1.wav
 drop.mp3
   "Dropping ping pong ball on table 2" by giddster: https://freesound.org/people/giddster/sounds/414461/
 
-cassette-door-open.wav, cassette-seat.wav, cassette-play.wav
+cassette-door-open.wav, cassette-seat.wav, cassette-play.wav,
+cassette-rewind-key.wav, cassette-rewind.wav, cassette-rewind-stop.wav
   "cassette tape action 2.wav" by cognito perceptu: https://freesound.org/people/cognito%20perceptu/sounds/98329/
 cassette-door-shut.wav
   "cassette tape deck slot open close hard nice spring various and spinout end.flac" by kyles: https://freesound.org/people/kyles/sounds/635487/

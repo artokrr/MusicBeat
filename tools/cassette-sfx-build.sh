@@ -35,4 +35,13 @@ cut 635487 8.8680 0.36 0.20 80  mix  cassette-door-shut.wav
 cut 98329  3.6690 0.48 0.22 70  mix  cassette-play.wav
 # STOP key: the clunk and the motor winding down (SYNC 0.015).     horraceradishh 734566
 cut 734566 16.3460 0.80 0.45 70 mix  cassette-stop.wav
+# The countdown's rewind, all from the same deck as the takes above (cognito perceptu 98329,
+# whose recording ends with the rewind key pressed, the tape winding and the deck stopping):
+# REWIND key: a soft first contact, then the latch (SYNC 0.035).
+cut 98329  9.2310 0.40 0.22 70  mix  cassette-rewind-key.wav
+# The tape winding at full speed: whine at ~740 Hz, reel tick every 138 ms. Played with a
+# rate curve that follows the reels, so the cut is a steady run with no attack of its own.
+cut 98329  3.7800 4.40 4.30 70  mix  cassette-rewind.wav
+# The winding stops with a clunk (SYNC 0.002).
+cut 98329  8.2370 0.52 0.20 70  mix  cassette-rewind-stop.wav
 rm -f tools/out/cassette-build/raw.wav
