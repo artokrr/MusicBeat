@@ -18,7 +18,7 @@ export class CassetteRecorder {
     this.mesh = new InstancedMesh(geometry, pixelMaterial(), movingParts.length);
     this.mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     this.mesh.frustumCulled = false;
-    // At this size the baked contact shadow is sufficient; no extra shadow draws.
+    // The small moving parts do not need their own additional shadow draws.
     scene.add(this.mesh);
   }
   update(state: RecorderState) {
