@@ -19,6 +19,7 @@ interface GameProps {
   beatmap: Beatmap;
   /** Read the audio clock directly, without sending every tick through React. */
   getCurrentTime: () => number;
+  /** Presses count: the song is playing, or an ambush countdown is serving. */
   isPlaying: boolean;
   volume: number;
   /** Sound cues at the exact moment things happen (see audio/sfx.ts). */
