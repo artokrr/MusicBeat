@@ -10,7 +10,7 @@ import { FEED_LEAD, RALLY_MAX_RETURN, RETURN_FADE_SECONDS } from './anim/flight'
 import type { OpponentNote } from './anim/flight';
 
 export type GameSoundEvent =
-  | { kind: 'hit'; result: Exclude<HitResult, 'miss'>; lane: LaneIndex; noteType: NoteType }
+  | { kind: 'hit'; result: Exclude<HitResult, 'miss'>; lane: LaneIndex; noteType: NoteType; smash?: boolean }
   | { kind: 'miss'; lane: LaneIndex }
   | { kind: 'swing'; lane: LaneIndex }
   | { kind: 'holdDone'; lane: LaneIndex };
@@ -90,6 +90,8 @@ function spawnExplosion(x: number, y: number, color: string, count: number = 10)
 }
 
 interface ActiveNote extends BeatNote {
+  /** Presentation only; latched before recordHit increments the combo. */
+  smash?: boolean;
   x: number;
   y: number;
   hit: boolean;
@@ -220,6 +222,8 @@ export default function Game({ beatmap, getCurrentTime, isPlaying, volume, onSou
         result = 'miss';
       }
 
+      note.smash = result !== 'miss' && (useGameStore.getState().score.combo + 1) % 25 === 0;
+
       // Hold notes: start holding instead of instant hit
       if (note.type === 'hold' && result !== 'miss') {
         const holdStartResult = result;
@@ -236,7 +240,7 @@ export default function Game({ beatmap, getCurrentTime, isPlaying, volume, onSou
         activeHoldNoteRef.current = note.id;
 
         recordHit(result);
-        onSound({ kind: 'hit', result: holdStartResult, lane: note.laneIndex, noteType: 'hold' });
+        onSound({ kind: 'hit', result: holdStartResult, lane: note.laneIndex, noteType: 'hold', smash: note.smash });
 
         // Don't mark as hit yet - will complete when hold finishes
         addHitFeedback({
@@ -261,7 +265,7 @@ export default function Game({ beatmap, getCurrentTime, isPlaying, volume, onSou
         // Start return from EXACTLY where it was hit (no snapping)
         note.returnStartX = note.x;
         note.returnStartY = note.y;
-        onSound({ kind: 'hit', result, lane: note.laneIndex, noteType: note.type });
+        onSound({ kind: 'hit', result, lane: note.laneIndex, noteType: note.type, smash: note.smash });
 
         // JUICE: Add shake and explosion on hit
         const isSwitch = note.type === 'switch';
