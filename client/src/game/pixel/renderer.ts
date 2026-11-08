@@ -118,7 +118,7 @@ const animator = createAnimator();
 const FLICKER_LOOK: Look = { ...STRANGER, face: [34, 32, 42] };
 const initial = animator.idle(0, 0);
 const sceneFrame: SceneFrame = {
-  recorder, timeMs: 0, playerStrokeMs: -Infinity, playing: false,
+  recorder, musicNoteTime: new Float64Array([-Infinity]), timeMs: 0, playerStrokeMs: -Infinity, playing: false,
   player: { pose: initial.player, look: PLAYER, visible: true },
   stranger: { pose: initial.stranger, look: STRANGER, visible: true },
   balls: Array.from({ length: 128 }, () => ({ pos: [0, 0, 0], color: NOTE_COLORS.normal, alpha: 1, holdProgress: -1 })),
@@ -183,7 +183,12 @@ export function describeFrame(frame: FrameState): SceneFrame {
   sampleRecorder(frame.nowMs);
   sceneFrame.timeMs = frame.nowMs;
   sceneFrame.playerStrokeMs = frame.pressedLane === null ? -Infinity : frame.nowMs - frame.pressAgeMs;
-  sceneFrame.playing = frame.countdown === null;
+  sceneFrame.playing = frame.countdown === null && frame.fade === 0 && recorder.playing;
+  sceneFrame.musicNoteTime[0] = -Infinity;
+  for (const note of frame.notes) {
+    if (note.time <= frame.songTime && frame.songTime - note.time < .12)
+      sceneFrame.musicNoteTime[0] = Math.max(sceneFrame.musicNoteTime[0], note.time);
+  }
   const nowWall = Date.now();
   let missRecently = false;
   for (const fb of frame.feedbacks)

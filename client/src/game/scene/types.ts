@@ -23,6 +23,8 @@ export interface SceneFrame {
   timeMs: number;
   recorder: RecorderState;
   playerStrokeMs: number;
+  /** Latest beatmap onset at the current song clock, regardless of judgement. */
+  musicNoteTime: Float64Array;
   playing: boolean;
   player: FigureView;
   stranger: FigureView;
