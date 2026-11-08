@@ -54,7 +54,7 @@ export class CPUBackend implements SceneBackend {
     for (let i = 0; i < frame.ballCount; i++) {
       const ball = frame.balls[i], p = ball.pos;
       const overTable = Math.abs(p[0]) <= TABLE_HALF_W && Math.abs(p[1]) <= TABLE_HALF_L && p[2] >= TABLE_Z;
-      R.dropShadow(p[0], p[1], overTable ? TABLE_Z : 0, 0.055 * 1.1);
+      R.dropShadow(p[0], p[1], overTable ? TABLE_Z : 0, 0.055 * 1.1, p[2] - (overTable ? TABLE_Z : 0));
       R.sphere(p, 0.055, ball.color, 'gloss', ball.alpha);
     }
     if (frame.player.visible)

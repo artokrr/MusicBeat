@@ -1,5 +1,5 @@
 /** Native-pixel atmospheric integration, appended to the existing outline pass.
- * Twelve fixed height slices, clipped against scene depth. No framebuffer blur. */
+ * Eight fixed height slices, clipped against scene depth. No framebuffer blur. */
 export const atmosphereUniforms = /* glsl */ `
  uniform mat4 cameraWorld;
  uniform mat4 inverseProjection;
@@ -11,14 +11,14 @@ export const atmosphereFragment = /* glsl */ `
  vec4 endView=inverseProjection*vec4(uv*2.-1.,d*2.-1.,1.);
  vec3 end=(cameraWorld*vec4(endView.xyz/endView.w,1.)).xyz;
  float travel=length(end-origin), density=0.;
- for(int i=0;i<12;i++) {
-  float z=(float(i)+.5)*3.25/12.;
+ for(int i=0;i<8;i++) {
+  float z=(float(i)+.5)*3.25/8.;
   float t=(z-origin.z)/ray.z;
   vec3 p=origin+ray*t;
   float radius=.12+(3.25-z)*.63;
   float r=length(p.xy-vec2(1.95,.35))/radius;
   if(t>0. && t<travel && r<1.)
-   density+=(1.-r*r)*(.27/max(.2,abs(ray.z)))*.024;
+   density+=(1.-r*r)*(.40625/max(.2,abs(ray.z)))*.018;
  }
  float grain=bayer(floor(uv*vec2(384.,216.)));
  color+=vec3(1.,.69,.34)*floor(density*lampLevel*48.+grain)/48.;

@@ -63,11 +63,13 @@ function paintGround(R: Renderer3D) {
     const [l, warm] = R.lightAt(p, [0, 0, 1]);
     if (PREMIUM_LOOK) {
       // Match the GL snow's separated cold fill / sodium contribution.
-      const sky = .25 + .28 * .7 / Math.hypot(.45, .55, .7);
-      const lamp = Math.min(1, warm * 1.35);
+      const sky = .19 + .40 * .7 / Math.hypot(.45, .55, .7);
+      const lamp = Math.min(1, warm * 1.05);
       return base.map((v, c) => {
-        const color = v / 255 * sky / .75 + [1.25, 1.05, .75][c] * lamp;
-        return 255 * color / (1 + Math.max(0, color - .85) * .30);
+        const snow = [176,182,202][c] + (v - [176,182,202][c]) * 1.2;
+        const t = clamp((y - 2.8) / 1.8, 0, 1);
+        const color = snow / 255 * sky * (1 - t*t*(3-2*t)*.18) / .75 + [.85, .68, .43][c] * lamp;
+        return 255 * color / (1 + Math.max(0, color - .65) * .65);
       }) as RGB;
     }
     const k = clamp(l / 0.75, 0.35, 1.6);
@@ -178,7 +180,8 @@ function paintTree(R: CourtyardPainter, root: Vec3, length: number, radius: numb
 function fog(R: Renderer3D) {
   const far = R.project([0, BUILDING_Y, 0]).d;
   const near = R.project([0, -3, 0]).d;
-  const haze: RGB = [34, 38, 58];
+  // Neutral veil cannot add saturation back to dark CPU shadow stamps.
+  const haze: RGB = PREMIUM_LOOK ? [38, 38, 38] : [34, 38, 58];
   for (let i = 0; i < R.W * R.H; i++) {
     const d = R.zb[i]!;
     if (d === -Infinity) continue;

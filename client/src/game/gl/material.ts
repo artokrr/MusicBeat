@@ -95,10 +95,10 @@ float visibility(sampler2D map, vec4 coord, float bias, bool spot) {
  float blocker=unpackRGBAToDepth(texture2D(map,sc.xy));
  float gap=spot ? max(0.,(.08*20./(20.-sc.z*19.92))-(.08*20./(20.-blocker*19.92))) : max(0.,sc.z-blocker)*29.9;
  float radius=clamp(gap*(spot?2.5:3.),.45,7.);
- float sum=0.;
- for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++)
+ float sum=texture2DCompare(map,sc.xy,sc.z);
+ for(int y=-1;y<=1;y+=2) for(int x=-1;x<=1;x+=2)
   sum+=texture2DCompare(map,sc.xy+vec2(float(x),float(y))*radius/1024.,sc.z);
- return sum/9.;
+ return sum/5.;
 }
 void main() {
  vec2 pixel=vec2(floor(gl_FragCoord.x),215.-floor(gl_FragCoord.y));
@@ -130,6 +130,7 @@ void main() {
  vec3 lv=vec3(1.95,.35,3.25)-p;
  float dist=length(lv);
  float warm=max(0.,dot(n,lv/dist))*3.2*lampLevel*pow(max(0.,lv.z/dist),6.)/(1.+pow(dist/2.2,2.));
+ float unblockedWarm=warm*1.05;
  float moonVisibility=1., lampVisibility=1.;
  #ifdef PREMIUM_LOOK
  #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
@@ -141,7 +142,7 @@ void main() {
  // Solid core and three visibility bands, Bayer only at the transitions.
  moonVisibility=floor(moonVisibility*3.+dither)/3.;
  lampVisibility=floor(lampVisibility*3.+dither)/3.;
- warm*=lampVisibility*1.35;
+ warm*=lampVisibility*1.05;
  // Keep the black hood closure out of direct sodium tint as well as bounce.
  if(max(base.r,max(base.g,base.b))<=.09) warm=0.;
  #endif
@@ -163,15 +164,25 @@ void main() {
   light+=grain;
  }
  vec3 color;
+ #ifdef PREMIUM_LOOK
+ vec3 snowLit=vec3(0.);
+ #endif
  if(kind==4.) {
   vec3 snow=texture2D(snowPattern,(pixel+.5)/vec2(384.,216.)).rgb*255.;
   float k=clamp(light/.75,.35,1.6);
   color=mix(snow*k,vec3(255,196,140)*k*.9,min(.5,warm*.7))/255.;
   #ifdef PREMIUM_LOOK
   // Sum independently occluded light, then roll off the pool highlights.
-  float sky=.25+max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.28*moonVisibility;
-  color=snow/255.*sky/.75 + vec3(1.25,1.05,.75)*warm;
-  color=color/(1.+max(vec3(0.),color-.85)*.30);
+  float moon=max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.40;
+  float sky=.19+moon*moonVisibility;
+  // Preserve drift texture through the shoulder; ground the far building edge.
+  snow=mix(vec3(176,182,202),snow,1.2);
+  float edge=1.-smoothstep(2.8,4.6,p.y)*.18;
+  vec3 lit=snow/255.*(.19+moon)*edge/.75 + vec3(.85,.68,.43)*min(1.,unblockedWarm);
+  color=snow/255.*sky*edge/.75 + vec3(.85,.68,.43)*warm;
+  color=color/(1.+max(vec3(0.),color-.65)*.65);
+  lit=lit/(1.+max(vec3(0.),lit-.65)*.65);
+  snowLit=lit;
   #endif
  } else {
   int tone=int(clamp(floor(light*4.2+.3+(dither-.5)*vSurface.z),0.,4.));
@@ -208,6 +219,9 @@ void main() {
   // Three trample levels, with Bayer transitions rather than blended decals.
   float stepWear=floor(wear*3.+dither)/3.;
   color*=mix(vec3(1.),vec3(.68,.70,.78),stepWear);
+  #ifdef PREMIUM_LOOK
+  snowLit*=mix(vec3(1.),vec3(.68,.70,.78),stepWear);
+  #endif
  }
  #ifdef PREMIUM_LOOK
  if(kind==4.) {
@@ -218,9 +232,12 @@ void main() {
    ao=max(ao,1.-smoothstep(.2,1.,dot(q,q)));
   }
   color*=1.-floor(ao*3.+dither)/3.*.28;
+  snowLit*=1.-floor(ao*3.+dither)/3.*.28;
   // Fixed world cells; no animation clock in the ice glints.
-  if(warm>.3 && hash21(floor(p.xy*48.))>.996 && dither<.35)
+  if(warm>.3 && hash21(floor(p.xy*48.))>.996 && dither<.35) {
    color+=vec3(.16,.14,.09)*lampVisibility;
+   snowLit+=vec3(.16,.14,.09)*lampVisibility;
+  }
  }
  if((kind==6. || kind==9.) && n.z>.9) {
   vec3 h=normalize(normalize(lv)+normalize(vec3(-.145364,-.717104,.681639)));
@@ -229,6 +246,8 @@ void main() {
  }
  if(!emissive && kind!=2. && max(base.r,max(base.g,base.b))>.09)
   color=mix(color,color*vec3(.97,.99,1.035),.35);
+ snowLit=mix(snowLit,snowLit*vec3(.97,.99,1.035),.35);
+ snowLit=clamp(snowLit,0.,1.);
  #endif
  // CPU clamps to its byte buffer before haze, including the bright lamp pool.
  color=clamp(color,0.,1.);
@@ -239,13 +258,37 @@ void main() {
   float farDepth=-dot(vec3(0,4.6,0)-vec3(.1,.1,.6),f);
   float t=clamp((nearDepth-depth)/(nearDepth-farDepth),0.,1.);
   color=mix(color,vec3(34,38,58)/255.,t*t*.55);
+  #ifdef PREMIUM_LOOK
+  snowLit=mix(snowLit,vec3(34,38,58)/255.,t*t*.55);
+  #endif
  }
+ #ifdef PREMIUM_LOOK
+ // Constrain after wear, contact and haze: otherwise fog can re-saturate a
+ // dark shadow. Preserve energy from independent visibility, not a tinted stamp.
+ if(kind==4. && min(moonVisibility,lampVisibility)<.99) {
+  float Y=dot(color,vec3(.2126,.7152,.0722));
+  float litY=max(.001,dot(snowLit,vec3(.2126,.7152,.0722)));
+  color=mix(vec3(Y),snowLit*(Y/litY),.55);
+ }
+ #endif
  // Keep the ball's small contact cue directly below it, independently of
  // the two physical light directions (same rule as CPU dropShadow).
  if(receiver) for(int i=0;i<64;i++) {
   if(i>=contactCount) break;
   vec2 delta=p.xy-contactBalls[i].xy;
+  #ifdef PREMIUM_LOOK
+  float height=contactBalls[i].w;
+  float radius=mix(.038,.052,clamp(height/.8,0.,1.));
+  float fade=1.-smoothstep(.45,1.8,height);
+  float edge=1.-smoothstep(.3,1.,dot(delta,delta)/(radius*radius));
+  if(abs(p.z-contactBalls[i].z)<.01 && edge*fade>.01) {
+   float Y=dot(color,vec3(.2126,.7152,.0722));
+   color=vec3(.985,.995,1.)*Y*(1.-.30*edge*fade);
+   break;
+  }
+  #else
   if(abs(p.z-contactBalls[i].z)<.01 && dot(delta,delta)<.0049) { color*=vec3(.64,.65,.76);break; }
+  #endif
  }
  outColor=vec4(color,1.);
  outSurface=vec4(n*.5+.5,(receiver || kind==10. || kind==11.)?1.:0.);
