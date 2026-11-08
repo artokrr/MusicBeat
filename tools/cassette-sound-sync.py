@@ -92,6 +92,37 @@ for n, started in enumerate(inserts):
     row(f'{tag}: tape seated', moved[-1] if moved else None, attack(s + 1.0, s + 1.2), 'last frame the tape moves')
     moved = changes(deck, s + 1.19, s + 1.7, skip_jumps=True)
     row(f'{tag}: door shut', moved[-1] if moved else None, attack(s + 1.3, s + 1.55), 'last frame the door moves')
+# The reels: two hubs about a pixel across in the tape window. The screen fades in
+# (opacity steps) just as the countdown starts, so each frame's brightness is first
+# matched to the previous one using a still patch of snow beside the deck.
+hx, hy = project(RX + .12, RY - .126, .1875)
+hubs = (int(hx) - 8, int(hy) - 5, int(hx) + 9, int(hy) + 6)
+still = (int(hx) - 60, int(hy) - 24, int(hx) - 30, int(hy) - 9)
+def reels(t_lo, t_hi):
+    x0, y0, x1, y1 = hubs; a0, b0, a1, b1 = still
+    out = []
+    for i in range(1, len(frame_t)):
+        if t_lo <= frame_t[i] <= t_hi:
+            ratio = np.median(frames[i, b0:b1, a0:a1]) / max(np.median(frames[i - 1, b0:b1, a0:a1]), 1)
+            if (np.abs(frames[i, y0:y1, x0:x1] - frames[i - 1, y0:y1, x0:x1] * ratio) > 6).any(): out.append(i)
+    return out
+
+# The countdown's rewind: the reels start at the key's latch and stop at the clunk.
+rewinds = []
+for e in cap['events']:
+    r = e.get('rewindStartedMs')
+    if isinstance(r, (int, float)) and (not rewinds or r != rewinds[-1]): rewinds.append(r)
+for n, started in enumerate(rewinds):
+    s = epoch(started); tag = f'rewind {n + 1}'
+    shown = changes(whole, s - .25, s + .25, 20000, normalise=False)
+    if shown: rows.append((f'{tag}: "3" first shown', (frame_t[shown[-1]] - frame_t[0]) * 1000, None, None, f'{(frame_t[shown[-1]] - s) * 1000:+.0f} ms from rewind start (screen change)'))
+    # Skip the frame the countdown overlay arrives on (it changes every pixel).
+    moved = reels(frame_t[shown[-1]] + .001 if shown else s, s + .4)
+    row(f'{tag}: REWIND key latches', moved[0] if moved else None, attack(s, s + .3), 'first frame the reels move')
+    # The end of continuous motion (three frames running), not a snowflake drifting past later.
+    moved = reels(s + 2.0, s + 2.9)
+    ends = [i for i in moved if i - 1 in moved and i - 2 in moved]
+    row(f'{tag}: wind stops (clunk)', ends[-1] if ends else None, attack(s + 2.2, s + 2.6), 'last frame the reels move')
 starts = [e for i, e in enumerate(cap['events']) if e['phase'] == 'playing' and cap['events'][i - 1]['phase'] == 'countdown']
 for n, e in enumerate(starts):
     s = e['epoch'] - 0.05
@@ -107,7 +138,7 @@ for name in ('pause', 'resume'):
 # (and the clapperboard) have that latency at the speakers too, so for them the
 # captured offset already stands.
 lag = float(np.median([x['currentTime'] - x['contextTime'] for x in cap['starts'] if x.get('contextTime')]))
-ahead = lambda name: any(w in name for w in ('seated', 'shut', 'lands'))
+ahead = lambda name: any(w in name for w in ('seated', 'shut', 'lands', 'rewind'))
 print(f'clapperboard: audio minus picture = {clap * 1000:.1f} ms (n={len(claps)}, spread {np.ptp(claps) * 1000:.1f} ms); median frame interval {np.median(np.diff(frame_t)) * 1000:.1f} ms; output latency {lag * 1000:.1f} ms')
 print(f"{'event':34s} {'frame (ms)':>10s} {'sound (ms)':>10s} {'captured':>9s} {'speakers':>9s}  how the frame was found")
 for name, f, a, d, note in rows:

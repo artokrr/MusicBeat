@@ -1,11 +1,12 @@
 // Records the cassette sequence the way a player meets it, with the page's own
 // audio captured inside the page (Chrome is muted; nothing reaches speakers).
 //
-//   node tools/cassette-sound.mjs [--vite 3140] [--cdp 9451] [--pass listen|measure|takes]
+//   node tools/cassette-sound.mjs [--vite 3140] [--cdp 9451] [--pass listen|measure|takes] [--sfx 0..1]
 //
-// listen  - everything audible: upload, flight, countdown, PLAY, gameplay,
-//           pause/resume, quit, a second upload (eject), PLAY again.
-//           -> tools/out/cassette-sound.mp4, cassette-sound-replace.mp4, cassette-sound-pause.mp4
+// listen  - everything audible: upload, flight, countdown (rewind), PLAY, gameplay,
+//           pause/resume, quit, a second upload (eject), Esc during its countdown, PLAY again.
+//           -> tools/out/cassette-sound.mp4, cassette-sound-replace.mp4, cassette-sound-pause.mp4,
+//              countdown-rewind.mp4 (seating, 3-2-1 rewind, PLAY, 4 s of play)
 // measure - the same flow, but only the cassette sounds reach the capture
 //           (music and the other effects are not started), for clean onsets.
 // takes   - each cassette sound alone, then a perfect paddle hit, through the
@@ -31,7 +32,8 @@ const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chro
   `--user-data-dir=${profile}`, '--window-size=1152,648', 'about:blank'], { stdio: 'ignore' });
 
 // Durations (s) of the cassette buffers as decoded, used to tell sources apart.
-const CASSETTE = { doorOpen: .45, eject: .30, snow: .28, seat: .50, doorShut: .36, play: .48, stop: .80, air: 1.3, thump: .09 };
+const CASSETTE = { doorOpen: .45, eject: .30, snow: .28, seat: .50, doorShut: .36, play: .48, stop: .80, air: 1.3, thump: .09,
+  rewindKey: .40, rewind: 4.40, rewindStop: .52 };
 const HIT = .16; // paddle, smash and table takes
 
 let ws;
@@ -104,7 +106,7 @@ try {
     const sfxModule=await import(sfxURL);
     Object.assign(window,{__store:store,__recorder:recorder,__cassette:cassette,__sfx:sfxModule.sfx,__sfxOutput:sfxModule.sfxOutput});
     let last={};
-    const watch=()=>{const s=store.getState(),r=recorder;const e={screen:s.screen,phase:s.phase,inserting:r.inserting,loaded:r.loaded,key:r.key,playing:r.playing,startedMs:r.startedMs};
+    const watch=()=>{const s=store.getState(),r=recorder;const e={screen:s.screen,phase:s.phase,inserting:r.inserting,loaded:r.loaded,key:r.key,playing:r.playing,startedMs:r.startedMs,rewindStartedMs:r.rewindStartedMs};
       if(Object.keys(e).some(k=>e[k]!==last[k]))window.__capture.events.push({ms:performance.now(),epoch:Date.now()/1000,...e});last=e;requestAnimationFrame(watch)};watch();
     // Clapperboard: a white frame and a click started in the same animation frame, on the sfx context.
     window.__clap=()=>new Promise(done=>requestAnimationFrame(()=>{
@@ -125,10 +127,14 @@ try {
   await evaluate('__sfxOutput().context.resume()');
   await sleep(300);
 
+  if (arg('sfx')) await evaluate(`__store.getState().setSfxVolume(${Number(arg('sfx'))})`);
   if (pass === 'takes') {
     // Each cassette sound alone, then the reference paddle hit.
     const takes = [['door-open', 'doorOpen', 'insert'], ['eject', 'eject', 'insert'], ['snow', 'snow', 'insert'], ['flight', 'air', 'insert'],
-      ['seat', 'seat|thump', 'insert'], ['door-shut', 'doorShut', 'insert'], ['play', 'play', 'play'], ['stop', 'stop', 'stop'], ['paddle', 'paddle', 'paddle']];
+      ['seat', 'seat|thump', 'insert'], ['door-shut', 'doorShut', 'insert'], ['play', 'play', 'play'], ['stop', 'stop', 'stop'],
+      ['rewind-key', 'rewindKey', 'rewind'], ['rewind-wind', 'rewind', 'rewind'], ['rewind-stop', 'rewindStop', 'rewind'],
+      ['rewind-countdown', 'rewindKey|rewind|rewindStop', 'rewind'], ['rewind-cancelled', 'rewindKey|rewind|rewindStop', 'rewind-cancel'],
+      ['paddle', 'paddle', 'paddle']];
     const segments = [];
     for (const [name, which, how] of takes) {
       const allowed = which === 'paddle' ? `d===${HIT}` : which.split('|').map(w => `d===${CASSETTE[w]}`).join('||');
@@ -136,8 +142,10 @@ try {
       const from = await mark(name);
       if (how === 'insert') await evaluate('__cassette.insert(performance.now(),true)');
       else if (how === 'paddle') await evaluate(`__sfx.hit('perfect',1,'tap')`);
+      else if (how === 'rewind') await evaluate('__cassette.rewind(performance.now())');
+      else if (how === 'rewind-cancel') { await evaluate('__cassette.rewind(performance.now())'); await sleep(1200); await evaluate('__cassette.cancelRewind()'); }
       else await evaluate(`__cassette.${how}()`);
-      await sleep(how === 'insert' ? 1900 : 1100);
+      await sleep(how === 'insert' ? 1900 : how.startsWith('rewind') ? 3000 : 1100);
       segments.push({ name, from });
     }
     const audio = await evaluate('__stopAudio()');
@@ -149,7 +157,7 @@ try {
     const table = [];
     for (const s of segments) {
       const at = (s.from - capture.audioStartPerf) / 1000, file = resolve(out, 'sounds', `${s.name}.wav`);
-      const length = s.name === 'stop' ? 1.0 : ['door-open', 'eject', 'snow', 'flight', 'seat', 'door-shut'].includes(s.name) ? 1.8 : 0.9;
+      const length = s.name === 'stop' ? 1.0 : s.name.startsWith('rewind') ? 2.9 : ['door-open', 'eject', 'snow', 'flight', 'seat', 'door-shut'].includes(s.name) ? 1.8 : 0.9;
       ffmpeg(['-ss', String(Math.max(0, at - 0.05)), '-t', String(length), '-i', wav, '-af', 'silenceremove=start_periods=1:start_threshold=-70dB,areverse,silenceremove=start_periods=1:start_threshold=-70dB,areverse,apad=pad_dur=0.25', file]);
       const log = execFileSync('/bin/sh', ['-c', `/opt/homebrew/bin/ffmpeg -hide_banner -nostats -i "${file}" -af apad=pad_dur=3,ebur128=peak=true -f null - 2>&1`], { encoding: 'utf8' });
       const M = [...log.matchAll(/ M:\s*(-?[\d.]+)/g)].map(m => +m[1]), S = [...log.matchAll(/ S:\s*(-?[\d.]+)/g)].map(m => +m[1]);
@@ -176,6 +184,10 @@ try {
     console.log('bot', await evaluate(readFileSync('tools/gl-bot.js', 'utf8')));
     await mark('upload2');
     await send('DOM.setFileInputFiles', { nodeId: await nodeOf('input[type=file]'), files: [song] });
+    // Esc during the second countdown: the game ignores it there, and the rewind must carry on once.
+    for (let i = 0; i < 300; i++) { await sleep(20); if (await evaluate(`__store.getState().screen==='playing'&&__store.getState().phase==='countdown'`)) break; }
+    await sleep(1200); await mark('countdown-escape'); await escape();
+    await mark(`phase after Esc: ${await evaluate('__store.getState().phase')}`);
     for (let i = 0; i < 200; i++) { await sleep(100); if (await evaluate('window.__bot.elapsed>=2.6')) break; }
     for (let i = 0; i < 3; i++) { await evaluate('__clap()'); await sleep(350); }
     await send('Page.stopScreencast');
@@ -198,6 +210,9 @@ try {
       cut('cassette-sound.mp4', up1 - 0.6, firstPlaying(capture.marks.find(m => m.name === 'upload1').epoch) + 5);
       cut('cassette-sound-pause.mp4', markAt('pause') - 0.6, markAt('quit') - 0.1);
       cut('cassette-sound-replace.mp4', up2 - 0.6, firstPlaying(capture.marks.find(m => m.name === 'upload2').epoch) + 2.5);
+      // From just before the tape seats, through the rewind and PLAY, to 4 s of play.
+      const inserted = capture.events.find(e => e.inserting && e.epoch > capture.marks.find(m => m.name === 'upload1').epoch);
+      cut('countdown-rewind.mp4', inserted.epoch - start + 0.85, firstPlaying(capture.marks.find(m => m.name === 'upload1').epoch) + 4);
     }
     console.log(JSON.stringify({ frames: frames.length, errors: errors.length, console: consoleLines, marks: capture.marks.map(m => m.name) }));
   }
