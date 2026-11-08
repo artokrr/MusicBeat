@@ -1,6 +1,7 @@
 // Sounds of the cassette recorder on the snow: the whole insert (door, flying
-// tape, eject, seat, door shut) and the PLAY / STOP keys. Recorded takes are
-// CC0 (see public/sfx/CREDITS.txt, rebuilt by tools/cassette-sfx-build.sh).
+// tape, eject, seat, door shut), the rewind during the 3-2-1 countdown and the
+// PLAY / STOP keys. Recorded takes are CC0 (see public/sfx/CREDITS.txt, rebuilt
+// by tools/cassette-sfx-build.sh).
 //
 // The insert is scheduled on the audio clock the moment it starts, against the
 // same timeline the animation samples (anim/recorder.ts), so each hit lands on
@@ -9,14 +10,15 @@
 
 import {
   DOOR_SHUT_START_MS, EJECT_END_MS, EJECT_START_MS, FLIGHT_END_MS, FLIGHT_START_MS, INSERT_MS,
-  RECORDER_X, RECORDER_Y, doorAt, oldTapeAt, tapeAt,
+  RECORDER_X, RECORDER_Y, REWIND_END_MS, REWIND_LATCH_MS, REWIND_STOP_MS,
+  doorAt, oldTapeAt, rewindSpeedAt, tapeAt,
 } from '../game/anim/recorder';
 import { project } from '../game/scene/camera';
 import { LOW_W } from '../game/pixel/stage';
 import { sfxOutput } from './sfx';
 import { airNoise, cassetteThump } from './sfxSynth';
 
-type Take = 'doorOpen' | 'eject' | 'snow' | 'seat' | 'doorShut' | 'play' | 'stop';
+type Take = 'doorOpen' | 'eject' | 'snow' | 'seat' | 'doorShut' | 'play' | 'stop' | 'rewindKey' | 'rewind' | 'rewindStop';
 
 /** Each take, and where inside it the hit that meets the picture sits (s). */
 const TAKES: Record<Take, { url: string; sync: number }> = {
@@ -27,6 +29,9 @@ const TAKES: Record<Take, { url: string; sync: number }> = {
   doorShut: { url: '/sfx/cassette-door-shut.wav', sync: 0.023 },
   play: { url: '/sfx/cassette-play.wav', sync: 0.040 },
   stop: { url: '/sfx/cassette-stop.wav', sync: 0.015 },
+  rewindKey: { url: '/sfx/cassette-rewind-key.wav', sync: 0.035 },
+  rewind: { url: '/sfx/cassette-rewind.wav', sync: 0 },
+  rewindStop: { url: '/sfx/cassette-rewind-stop.wav', sync: 0.002 },
 };
 
 /**
@@ -236,12 +241,82 @@ function whoosh(c: AudioContext, out: AudioNode, startedMs: number, live: Set<Au
   source.onended = () => live.delete(source);
 }
 
-let sequence: { startedMs: number; out: GainNode | null; live: Set<AudioScheduledSourceNode> } | null = null;
+/**
+ * The tape winding: one steady recorded run whose playback rate (pitch, and
+ * the rate of the reel ticks) and level follow rewindSpeedAt, the same curve
+ * the reels turn by. Joins late by skipping as much tape as already went past.
+ */
+function wind(c: AudioContext, out: AudioNode, startedMs: number, pan: number, live: Set<AudioScheduledSourceNode>) {
+  const buffer = buffers.rewind;
+  if (!buffer) return;
+  const total = (REWIND_END_MS - REWIND_LATCH_MS) / 1000;
+  const begin = audioTimeAt(c, startedMs + REWIND_LATCH_MS);
+  const now = c.currentTime;
+  const skip = Math.max(0, now - begin);
+  if (skip >= total) return;
+  const rateAt = (ms: number) => 0.15 + 0.85 * rewindSpeedAt(ms);
+  let offset = 0;
+  for (let ms = 0; ms < skip * 1000; ms++) offset += rateAt(REWIND_LATCH_MS + ms + 0.5) / 1000;
+  const length = total - skip, steps = Math.max(2, Math.round(length * 200));
+  const rate = new Float32Array(steps), level = new Float32Array(steps);
+  for (let i = 0; i < steps; i++) {
+    const ms = REWIND_LATCH_MS + (skip + length * (i / (steps - 1))) * 1000;
+    rate[i] = rateAt(ms);
+    level[i] = WIND_GAIN * rewindSpeedAt(ms) ** 1.3;
+  }
+  const at = Math.max(now, begin);
+  const source = c.createBufferSource();
+  source.buffer = buffer;
+  source.playbackRate.setValueCurveAtTime(rate, at, length);
+  const g = c.createGain();
+  g.gain.setValueCurveAtTime(level, at, length);
+  const p = c.createStereoPanner();
+  p.pan.value = pan;
+  source.connect(g);
+  g.connect(p);
+  p.connect(out);
+  source.start(at, offset);
+  source.stop(at + length + 0.01);
+  live.add(source);
+  source.onended = () => live.delete(source);
+}
+/** Gain of the winding at full speed. */
+const WIND_GAIN = 1.55;
 
-function scheduleInsert(c: AudioContext, bus: AudioNode, run: NonNullable<typeof sequence>, replacing: boolean) {
-  const out = c.createGain();
-  out.connect(bus);
-  run.out = out;
+interface Run { startedMs: number; out: GainNode | null; live: Set<AudioScheduledSourceNode> }
+let sequence: Run | null = null;
+let rewinding: Run | null = null;
+
+/** Silences what a run still has to play, quickly but without a click. */
+function silence(run: Run | null) {
+  if (!run?.out) return;
+  const c = run.out.context;
+  run.out.gain.setTargetAtTime(0, c.currentTime, 0.01);
+  for (const source of run.live) {
+    try { source.stop(c.currentTime + 0.06); } catch { /* already stopped */ }
+  }
+}
+
+/** Starts a run once its sounds are decoded and the context's clock is running. */
+function begin(startedMs: number, schedule: (c: AudioContext, out: GainNode, run: Run) => void): Run | null {
+  const output = sfxOutput();
+  if (!output) return null;
+  const { context: c, bus } = output;
+  const run: Run = { startedMs, out: null, live: new Set() };
+  const ready = load(c);
+  // A context that is still starting up has no clock to schedule against yet.
+  const running = c.state === 'running' ? Promise.resolve() : c.resume();
+  void Promise.all([ready, running]).then(() => {
+    if (sequence !== run && rewinding !== run) return;
+    const out = c.createGain();
+    out.connect(bus);
+    run.out = out;
+    schedule(c, out, run);
+  });
+  return run;
+}
+
+function scheduleInsert(c: AudioContext, out: AudioNode, run: Run, replacing: boolean) {
   const { startedMs, live } = run;
   const deck = panOf(RECORDER_X, RECORDER_Y, 0.1);
   const t = (ms: number) => startedMs + ms;
@@ -266,29 +341,37 @@ export const cassette = {
    */
   insert(startedMs: number, replacing: boolean) {
     cassette.cancel();
-    const output = sfxOutput();
-    if (!output) return;
-    const { context: c, bus } = output;
-    const run = { startedMs, out: null, live: new Set<AudioScheduledSourceNode>() };
-    sequence = run;
-    const ready = load(c);
-    // A context that is still starting up has no clock to schedule against yet.
-    const running = c.state === 'running' ? Promise.resolve() : c.resume();
-    void Promise.all([ready, running]).then(() => {
-      if (sequence === run) scheduleInsert(c, bus, run, replacing);
-    });
+    sequence = begin(startedMs, (c, out, run) => scheduleInsert(c, out, run, replacing));
   },
 
   /** The insert was abandoned (the song failed to load): silence what's still to come. */
   cancel() {
     const run = sequence;
     sequence = null;
-    if (!run?.out) return;
-    const c = run.out.context;
-    run.out.gain.setTargetAtTime(0, c.currentTime, 0.01);
-    for (const source of run.live) {
-      try { source.stop(c.currentTime + 0.06); } catch { /* already stopped */ }
-    }
+    silence(run);
+  },
+
+  /**
+   * The countdown's rewind: the REWIND key latches, the tape winds back and
+   * stops with a clunk before PLAY. Call right after rewindRecorder(startedMs).
+   * Starting again replaces a rewind still running rather than adding to it.
+   */
+  rewind(startedMs: number) {
+    cassette.cancelRewind();
+    rewinding = begin(startedMs, (c, out, run) => {
+      const deck = panOf(RECORDER_X, RECORDER_Y, 0.1);
+      const t = (ms: number) => startedMs + ms;
+      playAt(c, out, buffers.rewindKey, TAKES.rewindKey.sync, t(REWIND_LATCH_MS), { gain: 0.5, pan: deck }, run.live);
+      wind(c, out, startedMs, deck, run.live);
+      playAt(c, out, buffers.rewindStop, TAKES.rewindStop.sync, t(REWIND_STOP_MS), { gain: 0.42, pan: deck }, run.live);
+    });
+  },
+
+  /** The countdown was left before it finished: stop the tape and anything still to come. */
+  cancelRewind() {
+    const run = rewinding;
+    rewinding = null;
+    silence(run);
   },
 
   /** PLAY goes down and the transport catches the tape, coming up to speed. */

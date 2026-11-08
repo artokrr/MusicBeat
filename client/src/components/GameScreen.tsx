@@ -4,7 +4,7 @@ import MenuControls from './MenuControls';
 import { useGameStore } from '../store/gameStore';
 import { DIFFICULTY_PRESETS } from '../types/game';
 import Game from '../game/Game';
-import { playRecorder } from '../game/anim/recorder';
+import { cancelRewind, playRecorder, recorder, rewindRecorder } from '../game/anim/recorder';
 import { cassette } from '../audio/cassetteSfx';
 import { sfx } from '../audio/sfx';
 
@@ -220,17 +220,25 @@ export default function GameScreen() {
     setPhase('playing');
   }, [audioBuffer, clearFailTimeout, finalizeRun, setPhase, setRunOutcome, volume]);
 
-  // A blip on each countdown number (once per number, even if the effect re-runs).
-  const lastBlipRef = useRef<number | null>(null);
+  // Through 3, 2, 1 the recorder rewinds the tape, starting as "3" shows. Once
+  // per countdown: re-runs of this effect never start a second rewind.
+  const rewindStartRef = useRef<number | null>(null);
   useEffect(() => {
-    if (phase !== 'countdown' || countdown <= 0) {
-      lastBlipRef.current = null;
-      return;
-    }
-    if (lastBlipRef.current === countdown) return;
-    lastBlipRef.current = countdown;
-    sfx.countdown();
-  }, [phase, countdown]);
+    if (phase !== 'countdown' || rewindStartRef.current !== null) return;
+    const now = performance.now();
+    rewindRecorder(now);
+    if (recorder.rewindStartedMs !== now) return; // no tape in the deck
+    rewindStartRef.current = now;
+    cassette.rewind(now);
+  }, [phase]);
+  // Leaving the screen stops a rewind still running (StrictMode's trial
+  // unmount included, after which the effect above starts it afresh).
+  useEffect(() => () => {
+    if (rewindStartRef.current === null) return;
+    rewindStartRef.current = null;
+    cancelRewind();
+    cassette.cancelRewind();
+  }, []);
 
   // Start countdown and then play
   useEffect(() => {

@@ -203,11 +203,6 @@ export const sfx = {
     paddleHit({ pan: LANE_PAN[lane], gain: 0.6, lowpass: 6000 });
   },
 
-  /** 3, 2, 1: the ball bouncing on the table before the serve. */
-  countdown() {
-    take('table', { gain: 0.7 });
-  },
-
   /** The serve. */
   go() {
     paddleHit({ gain: 0.9 });
