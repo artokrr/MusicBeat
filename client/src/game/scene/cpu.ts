@@ -1,3 +1,4 @@
+import { PREMIUM_LOOK } from './look';
 import { CPURecorderNotes } from '../pixel/recorder-notes';
 import { CPURecorder } from '../pixel/recorder';
 import { createCourtyard, paintCourtyard, TABLE_HALF_L, TABLE_HALF_W, TABLE_Z } from '../pixel/courtyard';
@@ -56,11 +57,24 @@ export class CPUBackend implements SceneBackend {
     }
     if (frame.player.visible)
       drawFigure(R, frame.player.pose, frame.player.look, this.shadow);
+    if(PREMIUM_LOOK) {
+      this.contacts(frame.player);this.contacts(frame.stranger);
+      R.dropShadow(-.6,-1,0,.13);R.dropShadow(.6,-1,0,.13);
+      R.dropShadow(-.6,1,0,.13);R.dropShadow(.6,1,0,.13);
+      R.dropShadow(-3,-.2,0,.23);R.dropShadow(-3,1.4,0,.23);
+      R.dropShadow(2.35,-1.85,0,.28);R.dropShadow(.78,1.95,0,.22);
+    }
     R.applyShadows();
     R.edges();
     this.musicNotes.draw(R, frame);
     this.ctx.putImageData(R.image, 0, 0);
     return this.canvas;
+  }
+  private contacts(body: SceneFrame['player']) {
+    if(!body.visible)return;
+    const j=body.pose.joints;
+    if(j.ankleL[2]<.14 && j.toeL[2]<.08)this.renderer.dropShadow(j.toeL[0],j.toeL[1],0,.13);
+    if(j.ankleR[2]<.14 && j.toeR[2]<.08)this.renderer.dropShadow(j.toeR[0],j.toeR[1],0,.13);
   }
   dispose() { this.canvas.width = this.canvas.height = 0; }
 }
