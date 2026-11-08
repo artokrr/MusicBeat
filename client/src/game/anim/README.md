@@ -163,8 +163,11 @@ caller's presentation time. `insertCassette`, `playRecorder` and
 `cancelCassette` are event operations; `sampleRecorder` allocates no arrays or
 objects. The insertion takes 1450 ms, with the door closing over the last 270 ms.
 On replacement, the old cassette has landed beside the recorder by 470 ms,
-before the new tape seats. Reel angle advances only while playing and retains
-its value during pause. GameScreen sends PLAY immediately after establishing
+before the new tape seats. Reel angle advances while playing and retains its
+value during pause. During the 3-2-1 countdown `rewindRecorder` turns the reels
+backwards along `rewindSpeedAt` (spin-up at the REWIND key's latch, a slight
+slowing from "1", stopped by 2410 ms); `cassetteSfx` drives the winding sound's
+pitch and level from the same curve. PLAY or `cancelRewind` ends it. GameScreen sends PLAY immediately after establishing
 its existing audio clock; no note, judgement, input or audio scheduling changes
 are made by this module.
 
