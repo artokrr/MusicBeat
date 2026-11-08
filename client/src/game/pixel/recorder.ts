@@ -12,6 +12,7 @@ const moonLength = Math.hypot(...LIGHT.moon);
 export class CPURecorder {
   readonly boxes = new RecorderBoxes();
   private readonly vertices = new Float64Array(24);
+  private readonly heights = new Float64Array(8);
   private readonly point: Vec3 = [0,0,0];
   private readonly projected = {sx:0, sy:0, d:0};
   draw(R: Renderer3D, state: RecorderState) {
@@ -23,6 +24,7 @@ export class CPURecorder {
       for (let k=0;k<8;k++) {
         const x=(k&1)?.5:-.5, y=(k&2)?.5:-.5, z=(k&4)?.5:-.5;
         for(let j=0;j<3;j++)this.point[j]=m[at+j]*x+m[at+4+j]*y+m[at+8+j]*z+m[at+12+j];
+        this.heights[k]=this.point[2];
         project(this.point,this.projected);
         v[k*3]=this.projected.sx;v[k*3+1]=this.projected.sy;v[k*3+2]=this.projected.d;
       }
@@ -51,13 +53,17 @@ export class CPURecorder {
             const wa=((by-cy)*(x+.5-cx)+(cx-bx)*(y+.5-cy))/den;
             const wb=((cy-ay)*(x+.5-cx)+(ax-cx)*(y+.5-cy))/den,wc=1-wa-wb;
             if(wa<0||wb<0||wc<0)continue;
+            if(wa*this.heights[a/3]+wb*this.heights[b/3]+wc*this.heights[c/3]<0)continue;
             const depth=wa*v[a+2]+wb*v[b+2]+wc*v[c+2],p=y*384+x;
             if(depth<=R.zb[p])continue;
-            R.zb[p]=depth;R.recvZ[p]=-Infinity;
+            // Keep the baked snow receiver intact: restore() resets depth, not recvZ.
+            R.zb[p]=depth;
             const noise=bayer(x,y)-.5,tone=Math.max(0,Math.min(4,Math.floor(light*4.2+.3+noise*.25)));
             const scale=TONE[tone],cool=COOL[tone],w=warm>.12+noise*.15?Math.min(.45,warm*.7):0;
             for(let j=0;j<3;j++) {
-              const value=color[j]*scale*(1-cool)+LIGHT.cool[j]*cool;
+              const snow=nz>.5 && noise+.5<this.boxes.snow[i];
+              const base=snow ? (j===0?200:j===1?207:218) : color[j];
+              const value=base*scale*(1-cool)+LIGHT.cool[j]*cool;
               R.pix[p*4+j]=value*(1-w)+LIGHT.warm[j]*scale*w;
             }
             R.pix[p*4+3]=255;

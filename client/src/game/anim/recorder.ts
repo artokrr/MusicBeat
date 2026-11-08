@@ -5,7 +5,8 @@ export const RECORDER_Y = -1.85;
 /** One insert, in ms from insertCassette(). Sounds are scheduled from these. */
 export const DOOR_OPEN_MS = 230;        // the door swings open 0..DOOR_OPEN_MS
 export const EJECT_START_MS = 100;      // a previous tape is pushed out...
-export const EJECT_END_MS = 470;        // ...and comes to rest on the snow
+export const EJECT_END_MS = 820;        // ...first snow contact (crunch), before the slide
+export const EJECT_REST_MS = 1080;      // slide stops before the incoming tape seats
 export const FLIGHT_START_MS = 120;     // the new tape appears near the camera...
 export const FLIGHT_END_MS = 1150;      // ...and is seated in the deck
 export const DOOR_SHUT_START_MS = 1180; // the door swings shut, closed at INSERT_MS
@@ -25,13 +26,33 @@ export const recorder = {
   startedMs: -Infinity, seatedAtMs: -Infinity, inserting: false, loaded: false,
   playing: false, door: 0, key: 0, reel: 0, rewindStartedMs: -Infinity,
   tapeX: 0, tapeY: 0, tapeZ: 0, tapeScale: 1, tapeTilt: 0, tapeRoll: 0, tapeYaw: 0,
-  oldVisible: false, oldX: 0, oldY: 0, oldZ: 0, oldTilt: 0,
+  oldVisible: false, // whether this insert replaces a seated tape (audio event contract)
+  tapes: Array.from({ length: 7 }, () => ({
+    active: false, serial: -1, startedMs: -Infinity, ageMs: 0, retireMs: -Infinity,
+    landed: false, x: 0, y: 0, z: 0, tilt: 0, roll: 0, yaw: 0, scale: 1, snow: 0,
+  })),
 };
 let previousMs = 0;
-let replacing = false;
+export const TAPE_CAP = 6;
+export const TAPE_SNOW_MS = 540_000; // nine minutes: white face, a dark edge remains
+export const TAPE_BURIED_MS = 780_000;
+export const TAPE_RETIRE_MS = 700;
+// Seven separated destinations allow six resting tapes plus one sinking away.
+// Every centre stays well outside the player's +/- .6m lane and below judgement text.
+export const TAPE_SPOTS = [
+  [1.72, -2.48, -.32], [2.17, -2.78, .24], [2.66, -2.62, -.58],
+  [3.08, -2.42, .38], [3.04, -1.94, -.17], [1.75, -1.97, .63],
+  [3.49, -2.08, -.08],
+] as const;
+let serial = 0;
+let burialTimeScale = 1;
+/** Capture tools only. Vite removes the override in production builds. */
+export function setTapeBurialTimeScale(scale: number) {
+  if (import.meta.env.DEV) burialTimeScale = Math.max(0, Math.min(3600, Number.isFinite(scale) ? scale : 1));
+}
 const ease = (t: number) => { const x = Math.max(0, Math.min(1, t)); return x * x * (3 - 2 * x); };
 type TapePose = Pick<typeof recorder, 'tapeX' | 'tapeY' | 'tapeZ' | 'tapeScale' | 'tapeTilt' | 'tapeRoll' | 'tapeYaw'>;
-type OldTapePose = Pick<typeof recorder, 'oldX' | 'oldY' | 'oldZ' | 'oldTilt'>;
+export type EjectedTape = typeof recorder.tapes[number];
 /** How open the door is (0 shut, 1 open) at ms into an insert. */
 export function doorAt(ms: number) {
   return ease(ms / DOOR_OPEN_MS) * (1 - ease((ms - DOOR_SHUT_START_MS) / (INSERT_MS - DOOR_SHUT_START_MS)));
@@ -57,17 +78,57 @@ export function tapeAt(ms: number, out: TapePose) {
   out.tapeYaw = -.18 * (1 - t);
   return out;
 }
-/** The ejected tape at ms into a replacing insert, written into out. */
-export function oldTapeAt(ms: number, out: OldTapePose) {
-  const e = ease((ms - EJECT_START_MS) / (EJECT_END_MS - EJECT_START_MS));
-  out.oldX = RECORDER_X + .12 - .29 * e;
-  out.oldY = RECORDER_Y - .102 - .25 * e;
-  out.oldZ = .1875 + .14 * Math.sin(e * Math.PI) - .162 * e;
-  out.oldTilt = -e * Math.PI / 2;
+/** Ballistic rise, a half-turn onto the labelled face, then a short decelerating slide.
+ * EJECT_END_MS is first contact, not the end of horizontal movement. */
+export function oldTapeAt(ms: number, out: Pick<EjectedTape, 'serial' | 'x' | 'y' | 'z' | 'tilt' | 'roll' | 'yaw' | 'scale'>) {
+  const spot = TAPE_SPOTS[out.serial % TAPE_SPOTS.length];
+  const t = Math.max(0, Math.min(1, (ms - EJECT_START_MS) / (EJECT_END_MS - EJECT_START_MS)));
+  const slide = 1 - (1 - Math.max(0, Math.min(1, (ms - EJECT_END_MS) / (EJECT_REST_MS - EJECT_END_MS)))) ** 3;
+  const travel = t * .87 + slide * .13;
+  out.x = RECORDER_X + .12 + (spot[0] - RECORDER_X - .12) * travel;
+  out.y = RECORDER_Y - .102 + (spot[1] - RECORDER_Y + .102) * travel;
+  out.z = .1875 * (1 - t) + .021 * t + 1.65 * t * (1 - t);
+  out.tilt = -Math.PI / 2 * ease(t) - .3 * Math.sin(Math.PI * t);
+  out.roll = .5 * Math.sin(Math.PI * t);
+  out.yaw = spot[2] * ease(t) + .6 * Math.sin(Math.PI * t);
+  out.scale = 1 + .65 * ease(t * 3);
   return out;
 }
+function sampleTapes(nowMs: number, dtMs: number) {
+  const tapes = recorder.tapes;
+  for (let i = 0; i < tapes.length; i++) {
+    const tape = tapes[i];
+    if (!tape.active) continue;
+    const elapsed = nowMs - tape.startedMs;
+    if (!tape.landed && elapsed >= EJECT_END_MS) {
+      tape.landed = true;
+      let count = 0, oldest = tape;
+      for (let j = 0; j < tapes.length; j++) {
+        const candidate = tapes[j];
+        if (candidate.active && candidate.retireMs === -Infinity) {
+          count++;
+          if (candidate.serial < oldest.serial) oldest = candidate;
+        }
+      }
+      if (count > TAPE_CAP) oldest.retireMs = nowMs;
+    }
+    if (tape.landed) tape.ageMs += Math.min(dtMs, Math.max(0, elapsed - EJECT_END_MS)) * burialTimeScale;
+    if (elapsed < EJECT_REST_MS || nowMs - dtMs - tape.startedMs < EJECT_REST_MS) oldTapeAt(elapsed, tape);
+    const retiring = tape.retireMs === -Infinity ? 0 : ease((nowMs - tape.retireMs) / TAPE_RETIRE_MS);
+    tape.snow = Math.max(Math.min(1, tape.ageMs / TAPE_SNOW_MS), retiring);
+    const sinking = Math.max(ease((tape.ageMs - TAPE_SNOW_MS) / (TAPE_BURIED_MS - TAPE_SNOW_MS)), retiring);
+    if (elapsed >= EJECT_REST_MS) tape.z = .021 - .085 * sinking;
+    if (sinking >= 1) tape.active = false; // all geometry is already below the ground
+  }
+}
 export function insertCassette(nowMs: number) {
-  replacing = recorder.loaded;
+  sampleRecorder(nowMs);
+  recorder.oldVisible = recorder.loaded;
+  if (recorder.loaded) {
+    const tape = recorder.tapes[serial % recorder.tapes.length];
+    tape.active = true; tape.serial = serial++; tape.startedMs = nowMs;
+    tape.ageMs = 0; tape.retireMs = -Infinity; tape.landed = false; tape.snow = 0;
+  }
   recorder.startedMs = nowMs;
   recorder.seatedAtMs = nowMs + INSERT_MS;
   recorder.inserting = true;
@@ -76,7 +137,6 @@ export function insertCassette(nowMs: number) {
   recorder.key = 0;
   recorder.reel = 0;
   recorder.rewindStartedMs = -Infinity;
-  recorder.oldVisible = replacing;
   previousMs = nowMs;
   sampleRecorder(nowMs);
 }
@@ -103,6 +163,7 @@ export function playRecorder(playing: boolean, nowMs: number) {
 export function sampleRecorder(nowMs: number) {
   const dt = Math.max(0, nowMs - previousMs) / 1000;
   previousMs = nowMs;
+  sampleTapes(nowMs, dt * 1000);
   if (recorder.playing) recorder.reel = (recorder.reel + dt * 3.3) % (Math.PI * 2);
   else if (recorder.rewindStartedMs > -Infinity) {
     // Mean speed over the step (four samples), so the spin-up and the stop show
@@ -117,7 +178,6 @@ export function sampleRecorder(nowMs: number) {
   const ms = nowMs - recorder.startedMs;
   recorder.door = doorAt(ms);
   tapeAt(ms, recorder);
-  if (replacing) oldTapeAt(ms, recorder);
   if (ms >= INSERT_MS) {
     recorder.inserting = false;
     recorder.loaded = true;

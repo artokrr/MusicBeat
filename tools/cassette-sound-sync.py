@@ -7,6 +7,7 @@
 import json, math, sys, wave
 import numpy as np
 from PIL import Image
+from scipy.signal import correlate, resample_poly, butter, sosfilt
 
 prefix = sys.argv[1] if len(sys.argv) > 1 else 'tools/out/cassette-sound-measure'
 run = json.load(open(prefix + '.json'))
@@ -35,6 +36,22 @@ def attack(t_lo, t_hi, strongest=True, jump=12):
             score = env[i:i + 6].max()
             if score > best: best, best_i = score, i
     return None if best_i is None else a0 + best_i / 1000
+
+def matched_hit(name, target, sync, cutoff):
+    """Match the actual captured waveform, so the nearby door latch cannot be mistaken for eject."""
+    w = wave.open('client/public/sfx/cassette-' + name + '.wav')
+    take = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(float) / 32768
+    divisor = math.gcd(sr, w.getframerate())
+    take = resample_poly(take, sr // divisor, w.getframerate() // divisor)
+    take = sosfilt(butter(2, cutoff, fs=sr, output='sos'), take)[:int(sr * .12)]
+    lo = max(0, int((target - a0 - .25) * sr))
+    hi = min(len(audio), int((target - a0 + .25) * sr))
+    recording = audio[lo:hi]
+    corr = correlate(recording, take, mode='valid', method='fft')
+    energy = np.convolve(recording ** 2, np.ones(len(take)), mode='valid')
+    score = corr / np.sqrt(np.maximum(1e-15, energy * np.sum(take ** 2)))
+    at = int(np.argmax(score))
+    return a0 + (lo + at) / sr + sync, float(score[at])
 
 def changes(region, t_lo, t_hi, threshold=2, normalise=True, skip_jumps=False):
     """Frames in a time window where more than `threshold` pixels of the region changed from the previous frame.
@@ -86,8 +103,30 @@ for n, started in enumerate(inserts):
     first = changes(deck, s, s + .25)
     row(f'{tag}: door starts opening', first[0] if first else None, attack(s - .05, s + .2), 'latch')
     if n == 1:
-        moved = changes(landing, s + .25, s + .8, skip_jumps=True)
-        row(f'{tag}: old tape lands in snow', moved[-1] if moved else None, attack(s + .35, s + .7, jump=6), 'last frame the old tape moves')
+        # Contact is followed by a slide now. Use the first captured frame at
+        # the named movement/contact boundary, rather than the last moving pixel.
+        # Verify a local pixel change too; falling snow alone is not a landmark.
+        for label, constant, dur in [('eject pop', 'EJECT_START_MS', .30), ('old tape lands in snow', 'EJECT_END_MS', .28)]:
+            ms = float(src.split(constant + ' = ')[1].split(';')[0])
+            target = s + ms / 1000
+            fi = int(np.searchsorted(frame_t, target))
+            if cap.get('frameMarkers'):
+                # Markers are written with the scene copy, so compositor delay is
+                # included instead of assuming a timeline event was already visible.
+                for candidate in range(max(0,fi-2),min(len(frame_t),fi+15)):
+                    rgb=np.asarray(Image.open(f'{prefix}-frames/{candidate:05d}.png').convert('RGB'),dtype=float)
+                    pixel=rgb[212,380 if dur==.30 else 382]
+                    marked=(pixel[0]>pixel[1]+40 and pixel[2]>pixel[1]+40) if dur==.30 else (pixel[1]>pixel[0]+40 and pixel[1]>pixel[2]+40)
+                    if marked: fi=candidate;break
+                else: fi=None
+            region = deck if dur == .30 else (270, 180, 296, 207)
+            seen = frame_t[fi] if fi is not None else target
+            moved = changes(region, seen - .04, seen + .05, threshold=0, skip_jumps=True)
+            # Audio buffers have measured sync markers; detect their isolated attack
+            # near the scheduled contact, accounting for capture/output latency below.
+            heard, confidence = matched_hit('eject' if dur == .30 else 'snow', target, .003 if dur == .30 else .050, 7000 if dur == .30 else 6000)
+            row(f'{tag}: {label}', fi if moved else None, heard,
+                f'presented scene marker; local pixels checked; waveform correlation {confidence:.3f}')
     moved = changes(deck, s + .6, s + 1.18, skip_jumps=True)
     row(f'{tag}: tape seated', moved[-1] if moved else None, attack(s + 1.0, s + 1.2), 'last frame the tape moves')
     moved = changes(deck, s + 1.19, s + 1.7, skip_jumps=True)
@@ -138,7 +177,7 @@ for name in ('pause', 'resume'):
 # (and the clapperboard) have that latency at the speakers too, so for them the
 # captured offset already stands.
 lag = float(np.median([x['currentTime'] - x['contextTime'] for x in cap['starts'] if x.get('contextTime')]))
-ahead = lambda name: any(w in name for w in ('seated', 'shut', 'lands', 'rewind'))
+ahead = lambda name: not all(c.get('scheduled') for c in cap['claps']) and any(w in name for w in ('seated', 'shut', 'lands', 'rewind', 'eject pop'))
 print(f'clapperboard: audio minus picture = {clap * 1000:.1f} ms (n={len(claps)}, spread {np.ptp(claps) * 1000:.1f} ms); median frame interval {np.median(np.diff(frame_t)) * 1000:.1f} ms; output latency {lag * 1000:.1f} ms')
 print(f"{'event':34s} {'frame (ms)':>10s} {'sound (ms)':>10s} {'captured':>9s} {'speakers':>9s}  how the frame was found")
 for name, f, a, d, note in rows:
