@@ -154,3 +154,21 @@ The basket is generated with:
 
 Its 1,100 triangles use the existing metal/court-line palette. Placement in
 `gl/props.ts`, `pixel/courtyard.ts`, and `anim/flight.ts` must stay aligned.
+
+## Cassette presentation
+
+`recorder.ts` is independent of the character animator and song clock. It owns
+one mutable output object across menu/loading/game remounts, sampled using the
+caller's presentation time. `insertCassette`, `playRecorder` and
+`cancelCassette` are event operations; `sampleRecorder` allocates no arrays or
+objects. The insertion takes 1450 ms, with the door closing over the last 270 ms.
+On replacement, the old cassette has landed beside the recorder by 470 ms,
+before the new tape seats. Reel angle advances only while playing and retains
+its value during pause. GameScreen sends PLAY immediately after establishing
+its existing audio clock; no note, judgement, input or audio scheduling changes
+are made by this module.
+
+`node tools/cassette-check.mjs` validates finite transforms, seat timing,
+replacement, stop/resume, fixed buffers over 10,000 updates, and equivalence of
+128 hub poses between the seated fast path and complete transforms. Browser
+verification and recording commands are in `../gl/README.md`.

@@ -162,3 +162,64 @@ A representative seven-ball scene with both authored characters:
 heap profiles; it is not committed. CPU/GPU images now intentionally differ in
 props and atmosphere. Vite builds successfully with its existing large-chunk
 advisory. The existing React countdown-render warning is unrelated to this work.
+
+## Cassette recorder
+
+The unbranded recorder sits at `(2, -1.6, 0)`, right of the near table corner.
+Its 36 cm body projects to about 16 pixels; the handle rises above the silver
+speaker grille and dark cassette window. This placement clears the upload
+panel, bottom HUD, table, and player movement. There is no emissive indicator.
+
+`cassette_recorder.glb` is baked into the same static courtyard draw. The door,
+PLAY key, cassette and its two hubs use one additional instanced box draw in
+`gl/recorder.ts`. `scene/recorder-parts.json` supplies both the Blender body and
+CPU fallback, so neither renderer depends on downloading the new GLB to show
+the prop. CPU moving parts use a small depth-tested rasterizer, fixed scratch
+buffers, and the existing five-tone/Bayer palette.
+
+The module-owned `anim/recorder.ts` presentation state survives keyed screen
+remounts. A 1450 ms insertion opens the door, shrinks/tumbles a cassette from the
+former upload panel position, seats it, and closes the door. A replacement first
+ejects the previous tape onto the snow. `audio/songUpload.ts` starts decoding and
+worker preparation immediately on acceptance. Loading gates countdown on both
+preparation (including its existing 500 ms hold) and seating; neither animation
+nor progress interpolation postpones analysis. The existing audio start and
+clock assignment remain in place. PLAY, pause, resume and stop only notify the
+recorder after the corresponding audio action. Mechanical clicks use the SFX bus.
+
+Only the hubs are transformed during settled gameplay. Matrix, visibility,
+shape and CPU projection buffers are allocated once; the update code creates
+no arrays, objects, vectors or geometries. As with Three's other draws, this is
+not a claim of zero V8/runtime allocation; inspect the CDP report.
+
+Reproduce with Vite on 3130 and muted headless Chrome only:
+
+```sh
+node tools/cassette-check.mjs
+node tools/cassette-sequence.mjs
+node tools/cassette-sequence.mjs --cpu
+node tools/cassette-sequence.mjs --slow-analysis
+node tools/cassette-profile.mjs
+node tools/shot.mjs --url http://localhost:3130/ --port 9434 --out tools/out/cassette-detail.png --after tools/cassette-visual.js
+node tools/shot.mjs --url http://localhost:3130/ --port 9438 --out tools/out/cassette-errors.png --after tools/cassette-errors.js
+```
+
+The sequence runner uses the real file input and Escape/quit controls. It checks
+seating/countdown order, worker overlap, PLAY, pause/resume and replacement. It
+captures the actual page at 384×216, encodes at 60 fps, and upscales 3× with nearest
+neighbour. Web Audio destinations are diverted to in-page MediaStreams for the
+recording; Chrome also has `--mute-audio`. PNGs, MP4s and JSON reports live in
+ignored `tools/out/`. Each runner closes its own Chrome; stop Vite separately.
+
+The cassette pass's local verification completed 388/388 perfects with no
+bad judgements. A 30-second real-song CDP sample (1,800 frames, 1× CPU) measured
+the complete main-thread render callback at 0.60/1.50 ms median/p95 before and
+0.70/1.60 ms after, with zero React commits in either window. The courtyard now
+uses 44 rather than 43 draw calls. Entry/renderer gzip sizes changed from
+101.72/163.54 kB to 105.38/163.82 kB; the new GLB gzip is 4,297 bytes.
+A 960-frame, 512-byte-interval heap sample found no recorder transform-function
+allocations after warmup, but sampled 92,208 bytes (96 B/frame) in the new
+presentation-clock/GL wrapper paths, attributable to runtime numeric handling.
+Treat the fixed-storage rule as no explicit per-frame allocations, not a
+whole-engine zero-heap guarantee. See `tools/out/cassette-validation.json` and
+`cassette-heap-summary.json` for the measurements and their limits.
