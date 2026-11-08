@@ -85,6 +85,7 @@ uniform sampler2D footprints;
 uniform vec4 contactBalls[64];
 uniform int contactCount;
 uniform float lampLevel;
+uniform float openingWall;
 uniform vec4 groundContacts[20];
 ${pixelNoise}
 // Blocker/receiver distance controls the filter, never a screen blur.
@@ -151,7 +152,14 @@ void main() {
  #endif
  warm=clamp(warm,0.,1.);
  if(kind==1.) light+=(hash21(pixel)-.5)*.4;
- if(vSurface.y>0.) light+=(noise21(vec2(p.x*vSurface.y+p.z*3.,p.y*vSurface.y+p.z*9.))-.5)*.35;
+ if(vSurface.y>0.) {
+  float grain=(noise21(vec2(p.x*vSurface.y+p.z*3.,p.y*vSurface.y+p.z*9.))-.5)*.35;
+  // Close-up wall grain must follow the wall plane, not its fixed Y coordinate.
+  // Keep the historical expression untouched in gameplay, including look=old.
+  if((kind==12. || kind==5.) && openingWall>0.)
+   grain=mix(grain,(noise21(p.xz*2.)-.5)*.08,openingWall);
+  light+=grain;
+ }
  vec3 color;
  if(kind==4.) {
   vec3 snow=texture2D(snowPattern,(pixel+.5)/vec2(384.,216.)).rgb*255.;
@@ -246,11 +254,12 @@ void main() {
 `;
 /** Shared by every pixel material, including asynchronously loaded skins. */
 export const groundContactUniform = { value: new Float32Array(20 * 4) };
+export const openingWallUniform = { value: 0 };
 export const lampUniform = { value: 1 };
 export function pixelMaterial(capsules = false) {
   return new ShaderMaterial({
     glslVersion: GLSL3, lights: true,
-    uniforms: { ...UniformsUtils.merge([UniformsLib.lights]), windowPattern: { value: null }, snowPattern: { value: null }, footprints: { value: null }, contactBalls: { value: new Float32Array(64 * 4) }, contactCount: { value: 0 }, lampLevel: lampUniform, groundContacts: groundContactUniform },
+    uniforms: { ...UniformsUtils.merge([UniformsLib.lights]), windowPattern: { value: null }, snowPattern: { value: null }, footprints: { value: null }, contactBalls: { value: new Float32Array(64 * 4) }, contactCount: { value: 0 }, lampLevel: lampUniform, openingWall: openingWallUniform, groundContacts: groundContactUniform },
     defines: { ...(capsules ? { CAPSULE: 1 } : {}), ...(PREMIUM_LOOK ? { PREMIUM_LOOK: 1 } : {}) }, vertexShader: vertex, fragmentShader: fragment,
   });
 }

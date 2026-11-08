@@ -16,7 +16,7 @@ import { lampLevel } from './lamp';
 import { WorldSnow } from './weather';
 import { Breath } from './breath';
 import { Footprints } from './footprints';
-import { lampUniform, pixelNoise } from './material';
+import { lampUniform, openingWallUniform, pixelNoise } from './material';
 import type { Vec3 } from '../rig/joints';
 import type { SceneBackend, SceneFrame } from '../scene/types';
 const near = .1, far = 40, distance = 20;
@@ -173,6 +173,8 @@ export class GLBackend implements SceneBackend {
       this.bulb.set(1.95, .35, 3.275).project(this.camera);
       this.bulb.set((this.bulb.x * .5 + .5) * LOW_W, (this.bulb.y * .5 + .5) * LOW_H, this.bulb.z * .5 + .5);
     }
+    const intro = Math.max(0, Math.min(1, ((frame.introProgress ?? 1) - .6) / .4));
+    openingWallUniform.value = 1 - intro * intro * intro * (intro * (intro * 6 - 15) + 10);
     lampUniform.value = lampLevel(frame.timeMs);
     this.recorder.update(frame.recorder);
     this.musicNotes.update(frame);
