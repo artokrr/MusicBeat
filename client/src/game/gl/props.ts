@@ -55,7 +55,7 @@ export function propGeometry(root: Group, offset: Vec3 = [0, 0, 0]) {
       } else if (name === 'emissive_bulb') kind = 8;
       else if (name === 'table_green') { kind = 9; grain = 6; flags = 3; }
       else if (name === 'wood') grain = 8;
-      else if (name === 'wall') grain = 2;
+      else if (name === 'wall') { kind = 12; grain = 2; }
       else if (name === 'bark') kind = 1;
       for (let i = group.start; i < group.start + group.count; i++) {
         colors.setXYZ(i, color.r, color.g, color.b);

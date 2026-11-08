@@ -235,3 +235,11 @@ whole-engine zero-heap guarantee. See `tools/out/cassette-validation.json` and
 `cassette-heap-summary.json` for the measurements and their limits.
 
 For current revision evidence and limitations, see `tools/RECORDER-V2.md`.
+
+## Premium pixel look
+
+The default now separates moon/lamp visibility before lighting, adds grounded
+contact shading and distance-based Bayer penumbrae, and integrates a restrained
+sodium volume into the native-resolution final pass. `?look=old` preserves the
+original path; `?renderer=cpu` keeps working with approximate shadow fixes.
+See `tools/LOOK.md` for controls, limitations, pixel parity and measured costs.

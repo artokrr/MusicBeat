@@ -1,3 +1,4 @@
+import { PREMIUM_LOOK } from '../scene/look';
 import { BufferGeometry, Float32BufferAttribute, GLSL3, Points, ShaderMaterial } from 'three';
 import { lampUniform } from './material';
 import type { Scene } from 'three';
@@ -26,6 +27,7 @@ export class WorldSnow {
     geometry.setAttribute('motion', new Float32BufferAttribute(motion, 3));
     const material = new ShaderMaterial({
       glslVersion: GLSL3,
+      defines: PREMIUM_LOOK ? { PREMIUM_LOOK: 1 } : {},
       uniforms: { time: this.time, opening: this.opening, lampLevel: lampUniform },
       vertexShader: /* glsl */ `
         uniform float time;
@@ -55,6 +57,12 @@ export class WorldSnow {
           float glow=pow(max(0.,l.z/d),4.)/(1.+d*d*.18)*lampLevel;
           float band=floor(clamp(glow*5.,0.,3.));
           vec3 color=vec3(145.,153.,176.)/255.+band*vec3(.105,.075,.035);
+          #ifdef PREMIUM_LOOK
+          float radius=.12+max(0.,3.25-world.z)*.63;
+          float cone=(1.-smoothstep(radius*.55,radius,length(l.xy)))*step(0.,l.z)*lampLevel;
+          float level=floor(cone*3.+.5)/3.;
+          color=mix(vec3(.34,.38,.47),vec3(.91,.77,.54),level);
+          #endif
           outColor=vec4(color,1.);
           // .75 identifies unoutlined effects, distinct from ground receivers.
           outSurface=vec4(.5,.5,1.,.75);

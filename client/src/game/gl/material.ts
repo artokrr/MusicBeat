@@ -1,3 +1,4 @@
+import { PREMIUM_LOOK } from '../scene/look';
 import { GLSL3, MeshDepthMaterial, RGBADepthPacking, ShaderMaterial, UniformsLib, UniformsUtils } from 'three';
 // The CPU palette is authored in display RGB. Write it directly, with no
 // tone mapping or linear-to-sRGB conversion after quantization.
@@ -58,9 +59,11 @@ void main() {
  // The software renderer stamps shadows in screen space, onto whichever
  // receiver is visible there. Project table receivers back onto that ground
  // ray before looking up the real light-space maps to preserve this look.
+ #ifndef PREMIUM_LOOK
  if((surface.x==6. || surface.x==9.) && vNormalWorld.z>.9) {
   worldPosition.xyz+=vec3(.145364,.717104,-.681639)*(worldPosition.z/.681639);
  }
+ #endif
  #include <shadowmap_vertex>
 }
 `;
@@ -82,7 +85,21 @@ uniform sampler2D footprints;
 uniform vec4 contactBalls[64];
 uniform int contactCount;
 uniform float lampLevel;
+uniform float openingWall;
+uniform vec4 groundContacts[20];
 ${pixelNoise}
+// Blocker/receiver distance controls the filter, never a screen blur.
+float visibility(sampler2D map, vec4 coord, float bias, bool spot) {
+ vec3 sc=coord.xyz/coord.w; sc.z+=bias;
+ if(any(lessThan(sc,vec3(0))) || any(greaterThan(sc,vec3(1)))) return 1.;
+ float blocker=unpackRGBAToDepth(texture2D(map,sc.xy));
+ float gap=spot ? max(0.,(.08*20./(20.-sc.z*19.92))-(.08*20./(20.-blocker*19.92))) : max(0.,sc.z-blocker)*29.9;
+ float radius=clamp(gap*(spot?2.5:3.),.45,7.);
+ float sum=0.;
+ for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++)
+  sum+=texture2DCompare(map,sc.xy+vec2(float(x),float(y))*radius/1024.,sc.z);
+ return sum/9.;
+}
 void main() {
  vec2 pixel=vec2(floor(gl_FragCoord.x),215.-floor(gl_FragCoord.y));
  float dither=bayer(pixel);
@@ -113,15 +130,49 @@ void main() {
  vec3 lv=vec3(1.95,.35,3.25)-p;
  float dist=length(lv);
  float warm=max(0.,dot(n,lv/dist))*3.2*lampLevel*pow(max(0.,lv.z/dist),6.)/(1.+pow(dist/2.2,2.));
- float light=.34+max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.42+warm;
+ float moonVisibility=1., lampVisibility=1.;
+ #ifdef PREMIUM_LOOK
+ #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
+ moonVisibility=visibility(directionalShadowMap[0],vDirectionalShadowCoord[0],directionalLightShadows[0].shadowBias,false);
+ #endif
+ #if defined(USE_SHADOWMAP) && NUM_SPOT_LIGHT_SHADOWS > 0
+ lampVisibility=visibility(spotShadowMap[0],vSpotLightCoord[0],spotLightShadows[0].shadowBias,true);
+ #endif
+ // Solid core and three visibility bands, Bayer only at the transitions.
+ moonVisibility=floor(moonVisibility*3.+dither)/3.;
+ lampVisibility=floor(lampVisibility*3.+dither)/3.;
+ warm*=lampVisibility*1.35;
+ // Keep the black hood closure out of direct sodium tint as well as bounce.
+ if(max(base.r,max(base.g,base.b))<=.09) warm=0.;
+ #endif
+ float light=.34+max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.42*moonVisibility+warm;
+ #ifdef PREMIUM_LOOK
+ float pool=exp(-dot(p.xy-vec2(1.95,.35),p.xy-vec2(1.95,.35))*.32);
+ float bounce=.065*pool*max(0.,1.-p.z/1.5)*(1.-max(0.,n.z))*lampLevel;
+ // Never add bounce to the stranger's black hood closure.
+ if(max(base.r,max(base.g,base.b))>.09) { light+=bounce; warm+=bounce; }
+ #endif
  warm=clamp(warm,0.,1.);
  if(kind==1.) light+=(hash21(pixel)-.5)*.4;
- if(vSurface.y>0.) light+=(noise21(vec2(p.x*vSurface.y+p.z*3.,p.y*vSurface.y+p.z*9.))-.5)*.35;
+ if(vSurface.y>0.) {
+  float grain=(noise21(vec2(p.x*vSurface.y+p.z*3.,p.y*vSurface.y+p.z*9.))-.5)*.35;
+  // Close-up wall grain must follow the wall plane, not its fixed Y coordinate.
+  // Keep the historical expression untouched in gameplay, including look=old.
+  if((kind==12. || kind==5.) && openingWall>0.)
+   grain=mix(grain,(noise21(p.xz*2.)-.5)*.08,openingWall);
+  light+=grain;
+ }
  vec3 color;
  if(kind==4.) {
   vec3 snow=texture2D(snowPattern,(pixel+.5)/vec2(384.,216.)).rgb*255.;
   float k=clamp(light/.75,.35,1.6);
   color=mix(snow*k,vec3(255,196,140)*k*.9,min(.5,warm*.7))/255.;
+  #ifdef PREMIUM_LOOK
+  // Sum independently occluded light, then roll off the pool highlights.
+  float sky=.25+max(0.,dot(n,normalize(vec3(-.45,.55,.7))))*.28*moonVisibility;
+  color=snow/255.*sky/.75 + vec3(1.25,1.05,.75)*warm;
+  color=color/(1.+max(vec3(0.),color-.85)*.30);
+  #endif
  } else {
   int tone=int(clamp(floor(light*4.2+.3+(dither-.5)*vSurface.z),0.,4.));
   const float tones[5]=float[5](.32,.52,.74,.95,1.15);
@@ -136,6 +187,7 @@ void main() {
  }
  // The original casts only on snow/table, then tints the already quantized
  // colour. Keep that rule, but derive occlusion from real shadow maps.
+ #ifndef PREMIUM_LOOK
  if(receiver && kind!=3.) {
   float moon=1., lamp=1.;
   #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
@@ -150,12 +202,34 @@ void main() {
   if(lamp<.5) color*=vec3(.64,.65,.76);
   else if(moon<1.-dither*.65) color*=dither>.5?vec3(.8,.8,.87):vec3(.64,.65,.76);
  }
+ #endif
  if(kind==4. && abs(p.x)<3. && abs(p.y)<4.) {
   float wear=texture2D(footprints,(p.xy+vec2(3.,4.))/vec2(6.,8.)).r;
   // Three trample levels, with Bayer transitions rather than blended decals.
   float stepWear=floor(wear*3.+dither)/3.;
   color*=mix(vec3(1.),vec3(.68,.70,.78),stepWear);
  }
+ #ifdef PREMIUM_LOOK
+ if(kind==4.) {
+  float ao=0.;
+  for(int i=0;i<20;i++) {
+   vec4 c=groundContacts[i];
+   vec2 q=(p.xy-c.xy)/max(c.zw,vec2(.001));
+   ao=max(ao,1.-smoothstep(.2,1.,dot(q,q)));
+  }
+  color*=1.-floor(ao*3.+dither)/3.*.28;
+  // Fixed world cells; no animation clock in the ice glints.
+  if(warm>.3 && hash21(floor(p.xy*48.))>.996 && dither<.35)
+   color+=vec3(.16,.14,.09)*lampVisibility;
+ }
+ if((kind==6. || kind==9.) && n.z>.9) {
+  vec3 h=normalize(normalize(lv)+normalize(vec3(-.145364,-.717104,.681639)));
+  float sheen=pow(max(0.,dot(n,h)),28.)*.10*lampVisibility;
+  color+=vec3(1.,.85,.65)*floor(sheen*32.+dither)/32.;
+ }
+ if(!emissive && kind!=2. && max(base.r,max(base.g,base.b))>.09)
+  color=mix(color,color*vec3(.97,.99,1.035),.35);
+ #endif
  // CPU clamps to its byte buffer before haze, including the bright lamp pool.
  color=clamp(color,0.,1.);
  if(vSurface.w==1. || vSurface.w==2.) {
@@ -175,15 +249,20 @@ void main() {
  }
  outColor=vec4(color,1.);
  outSurface=vec4(n*.5+.5,(receiver || kind==10. || kind==11.)?1.:0.);
+ #ifdef PREMIUM_LOOK
+ if(emissive && base.r>.6 && base.r>base.b*1.3) outSurface.a=.6;
+ #endif
 }
 `;
 /** Shared by every pixel material, including asynchronously loaded skins. */
+export const groundContactUniform = { value: new Float32Array(20 * 4) };
+export const openingWallUniform = { value: 0 };
 export const lampUniform = { value: 1 };
 export function pixelMaterial(capsules = false) {
   return new ShaderMaterial({
     glslVersion: GLSL3, lights: true,
-    uniforms: { ...UniformsUtils.merge([UniformsLib.lights]), windowPattern: { value: null }, snowPattern: { value: null }, footprints: { value: null }, contactBalls: { value: new Float32Array(64 * 4) }, contactCount: { value: 0 }, lampLevel: lampUniform },
-    defines: capsules ? { CAPSULE: 1 } : {}, vertexShader: vertex, fragmentShader: fragment,
+    uniforms: { ...UniformsUtils.merge([UniformsLib.lights]), windowPattern: { value: null }, snowPattern: { value: null }, footprints: { value: null }, contactBalls: { value: new Float32Array(64 * 4) }, contactCount: { value: 0 }, lampLevel: lampUniform, openingWall: openingWallUniform, groundContacts: groundContactUniform },
+    defines: { ...(capsules ? { CAPSULE: 1 } : {}), ...(PREMIUM_LOOK ? { PREMIUM_LOOK: 1 } : {}) }, vertexShader: vertex, fragmentShader: fragment,
   });
 }
 /** Shadow silhouettes use exactly the same capsule deformation as colour. */

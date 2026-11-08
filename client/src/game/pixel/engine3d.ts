@@ -1,3 +1,4 @@
+import { PREMIUM_LOOK } from '../scene/look';
 // A tiny 3D renderer that draws straight into the low-res pixel buffer.
 //
 // Orthographic camera, a depth buffer, and three primitives: spheres (and
@@ -95,6 +96,13 @@ export class Renderer3D {
   readonly zb = new Float32Array(W * H);
   /** Depth of the receiving surface (ground or table top) at each pixel, or -Infinity. */
   readonly recvZ = new Float32Array(W * H);
+  private readonly moonShadow = new Float32Array(W * H);
+  private readonly lampShadow = new Float32Array(W * H);
+  private readonly contactShadow = new Float32Array(W * H);
+  private readonly lampWeight = new Float32Array(W * H);
+  private readonly shadowTint: RGB = [1, 1, 1];
+  private readonly shadowPoint: Vec3 = [0, 0, 0];
+  private readonly shadowUp: Vec3 = [0, 0, 1];
   private readonly shadow = new Uint8Array(W * H);
 
   private readonly bakedPix: Uint8ClampedArray;
@@ -127,6 +135,13 @@ export class Renderer3D {
     this.moon = normalize(light.moon);
     this.zb.fill(-Infinity);
     this.recvZ.fill(-Infinity);
+    if (PREMIUM_LOOK) for(let i=0;i<W*H;i++) {
+      const p=this.unprojectGround(i%W+.5,Math.floor(i/W)+.5);
+      const light=this.lightAt(p,this.shadowUp);
+      const lamp=Math.min(1,light[1]*1.35);
+      const sky=.25+.28*Math.max(0,dot(this.shadowUp,this.moon));
+      this.lampWeight[i]=lamp/(sky+lamp);
+    }
   }
 
   // ---------- camera ----------
@@ -169,6 +184,7 @@ export class Renderer3D {
 
   /** Posterize a lit colour into one of five tones, cool in the dark and warm in lamp light. */
   shade(base: RGB, l: number, warm: number, ix: number, iy: number, ditherAmt: number): RGB {
+    if (PREMIUM_LOOK && Math.max(...base) <= .09 * 255) warm = 0;
     const k = clamp(Math.floor(l * 4.2 + 0.3 + (bayer(ix, iy) - 0.5) * ditherAmt), 0, 4);
     const m = TONE_SCALE[k]!;
     const coolMix = TONE_COOL[k]!;
@@ -312,13 +328,13 @@ export class Renderer3D {
     const h = c[2] - surfaceZ;
     if (h < -0.01) return;
     const m = this.moon;
-    this.markShadow(c[0] - (m[0] * h) / m[2], c[1] - (m[1] * h) / m[2], surfaceZ, rad, strength === 2 ? 1 : 2);
+    this.markShadow(c[0] - (m[0] * h) / m[2], c[1] - (m[1] * h) / m[2], surfaceZ, rad, strength === 2 ? 1 : 2, 1, Math.max(0,h)*.07);
     for (const lamp of this.light.lamps) {
       const lh = lamp.pos[2] - surfaceZ;
       if (h >= lh - 0.05) continue;
       if (Math.hypot(c[0] - lamp.pos[0], c[1] - lamp.pos[1]) > lamp.radius * 1.3) continue;
       const t = lh / (lh - h);
-      this.markShadow(lamp.pos[0] + (c[0] - lamp.pos[0]) * t, lamp.pos[1] + (c[1] - lamp.pos[1]) * t, surfaceZ, rad * Math.min(t, 1.3), strength);
+      this.markShadow(lamp.pos[0] + (c[0] - lamp.pos[0]) * t, lamp.pos[1] + (c[1] - lamp.pos[1]) * t, surfaceZ, rad * Math.min(t, 1.3), strength, 2, Math.max(0,h)*.09);
     }
   }
 
@@ -327,8 +343,10 @@ export class Renderer3D {
     this.markShadow(x, y, surfaceZ, rad, 2);
   }
 
-  private markShadow(gx: number, gy: number, gz: number, rad: number, strength: 1 | 2) {
-    const p = this.project([gx, gy, gz]);
+  private markShadow(gx: number, gy: number, gz: number, rad: number, strength: 1 | 2, source = 0, penumbra = 0) {
+    this.shadowPoint[0]=gx;this.shadowPoint[1]=gy;this.shadowPoint[2]=gz;
+    const p = this.project(this.shadowPoint);
+    if (PREMIUM_LOOK) rad+=penumbra;
     const rx = rad * this.S * 1.05;
     const ry = rx * Math.sin(this.pitch) + 0.5;
     const y0 = Math.max(0, Math.floor(p.sy - ry));
@@ -341,6 +359,12 @@ export class Renderer3D {
         const dy = (iy + 0.5 - p.sy) / ry;
         if (dx * dx + dy * dy > 1) continue;
         const i = iy * W + ix;
+        if (PREMIUM_LOOK) {
+          const r=Math.sqrt(dx*dx+dy*dy), edge=Math.min(.85,penumbra/Math.max(.01,rad));
+          const coverage=edge>0?Math.min(1,(1-r)/edge):1;
+          const target=source===1?this.moonShadow:source===2?this.lampShadow:this.contactShadow;
+          target[i]=Math.max(target[i],coverage);
+        }
         if (this.shadow[i]! < strength) this.shadow[i] = strength;
       }
     }
@@ -352,7 +376,25 @@ export class Renderer3D {
       const s = this.shadow[i]!;
       if (!s) continue;
       this.shadow[i] = 0;
-      if (this.recvZ[i] === -Infinity || this.zb[i] !== this.recvZ[i]) continue;
+      if (this.recvZ[i] === -Infinity || this.zb[i] !== this.recvZ[i]) {
+        if(PREMIUM_LOOK) this.moonShadow[i]=this.lampShadow[i]=this.contactShadow[i]=0;
+        continue;
+      }
+      if (PREMIUM_LOOK) {
+        const d=bayer(i%W,Math.floor(i/W));
+        const moon=Math.floor(this.moonShadow[i]*3+d)/3;
+        const lamp=Math.floor(this.lampShadow[i]*3+d)/3;
+        const contact=this.contactShadow[i];
+        this.moonShadow[i]=this.lampShadow[i]=this.contactShadow[i]=0;
+        const w=this.lampWeight[i];
+        // CPU retains baked RGB; approximate independent energy loss rather
+        // than applying the old equally strong tint to both lights.
+        const loss=moon*.22*(1-w)+lamp*w*.85+contact*.25;
+        this.shadowTint[0]=1-loss-lamp*w*.12;
+        this.shadowTint[1]=1-loss-lamp*w*.06;
+        this.shadowTint[2]=1-loss*.85;
+        this.tint(i,this.shadowTint);continue;
+      }
       if (s === 1 && bayer(i % W, (i / W) | 0) > 0.5) this.tint(i, SHADOW_SOFT);
       else this.tint(i, SHADOW_HARD);
     }

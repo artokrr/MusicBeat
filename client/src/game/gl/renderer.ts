@@ -1,3 +1,6 @@
+import { atmosphereUniforms, atmosphereFragment } from './atmosphere';
+import { PREMIUM_LOOK } from '../scene/look';
+import { updateGroundContacts } from './contacts';
 import { WorldRecorderNotes } from './recorder-notes';
 import { CassetteRecorder } from './recorder';
 import { Color, DepthTexture, DirectionalLight, Mesh, NearestFilter, NoToneMapping, OrthographicCamera, PCFSoftShadowMap, PlaneGeometry, Scene, ShaderMaterial, SpotLight, UnsignedIntType, Vector3, WebGLRenderer, WebGLRenderTarget, } from 'three';
@@ -13,7 +16,7 @@ import { lampLevel } from './lamp';
 import { WorldSnow } from './weather';
 import { Breath } from './breath';
 import { Footprints } from './footprints';
-import { lampUniform, pixelNoise } from './material';
+import { lampUniform, openingWallUniform, pixelNoise } from './material';
 import type { Vec3 } from '../rig/joints';
 import type { SceneBackend, SceneFrame } from '../scene/types';
 const near = .1, far = 40, distance = 20;
@@ -25,6 +28,7 @@ const outlineFragment = /* glsl */ `
  uniform vec3 lampScreen;
  uniform float lampLevel;
  ${pixelNoise}
+ ${PREMIUM_LOOK ? atmosphereUniforms : ''}
  varying vec2 vUv;
  float depth(vec2 uv) { return texture2D(depthMap,uv).r; }
  bool background(vec2 uv) { return depth(uv)>.99999 || texture2D(surfaceMap,uv).a>.9; }
@@ -50,6 +54,7 @@ const outlineFragment = /* glsl */ `
   float strength=radius<2.5?.25:radius<4.5?.13:.065;
   if(d>=lampScreen.z-.0001 && bayer(floor(uv*vec2(384.,216.)))<coverage)
    color+=vec3(1.,.66,.29)*strength*lampLevel;
+  ${PREMIUM_LOOK ? atmosphereFragment : ''}
   gl_FragColor=vec4(min(color,1.),1.);
  }
 `;
@@ -136,7 +141,7 @@ export class GLBackend implements SceneBackend {
     const bulb = this.bulb.set(1.95, .35, 3.275).project(this.camera);
     bulb.set((bulb.x*.5+.5)*LOW_W, (bulb.y*.5+.5)*LOW_H, bulb.z*.5+.5);
     const material = new ShaderMaterial({
-      uniforms: { colorMap: { value: this.target.textures[0] }, surfaceMap: { value: this.target.textures[1] }, depthMap: { value: this.target.depthTexture }, lampScreen: { value: bulb }, lampLevel: lampUniform },
+      uniforms: { colorMap: { value: this.target.textures[0] }, surfaceMap: { value: this.target.textures[1] }, depthMap: { value: this.target.depthTexture }, lampScreen: { value: bulb }, lampLevel: lampUniform, cameraWorld: { value: this.camera.matrixWorld }, inverseProjection: { value: this.camera.projectionMatrixInverse } },
       vertexShader: 'varying vec2 vUv; void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}',
       fragmentShader: outlineFragment, depthTest: false, depthWrite: false,
     });
@@ -144,6 +149,7 @@ export class GLBackend implements SceneBackend {
   }
   get available() { return !this.lost && !this.renderer.getContext().isContextLost(); }
   render(frame: SceneFrame) {
+    if (PREMIUM_LOOK) updateGroundContacts(frame);
     const cameraChanged = frame.introProgress !== undefined || this.opening;
     if (frame.introProgress !== undefined) {
       const view = openingCamera(frame.introProgress);
@@ -167,6 +173,8 @@ export class GLBackend implements SceneBackend {
       this.bulb.set(1.95, .35, 3.275).project(this.camera);
       this.bulb.set((this.bulb.x * .5 + .5) * LOW_W, (this.bulb.y * .5 + .5) * LOW_H, this.bulb.z * .5 + .5);
     }
+    const intro = Math.max(0, Math.min(1, ((frame.introProgress ?? 1) - .6) / .4));
+    openingWallUniform.value = 1 - intro * intro * intro * (intro * (intro * 6 - 15) + 10);
     lampUniform.value = lampLevel(frame.timeMs);
     this.recorder.update(frame.recorder);
     this.musicNotes.update(frame);
