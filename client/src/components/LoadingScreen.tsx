@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { pendingUpload, clearUpload } from '../audio/songUpload';
 import { recorder, cancelCassette, sampleRecorder } from '../game/anim/recorder';
-import { sfx } from '../audio/sfx';
+import { cassette } from '../audio/cassetteSfx';
 import { at, u } from '../game/pixel/layout';
 import PxText from '../game/pixel/PxText';
 import { useGameStore } from '../store/gameStore';
@@ -28,7 +28,6 @@ export default function LoadingScreen() {
     let cancelled = false;
     let prepared = false;
     let readyAt = Infinity;
-    let clunked = false;
     const current = () => !cancelled && pendingUpload === request;
     // Sampling and preparation are independent. The gate is checked even when
     // rendering was suspended in a background tab, using the same time origin.
@@ -37,7 +36,6 @@ export default function LoadingScreen() {
       sampleRecorder(performance.now());
       if (!recorder.inserting) {
         setInserting(false);
-        if (!clunked && recorder.loaded) { clunked = true; sfx.cassetteDoor(); }
         if (prepared && performance.now() >= readyAt) {
           clearUpload(request);
           setScreen('playing');
@@ -57,6 +55,7 @@ export default function LoadingScreen() {
       if (!current()) return;
       console.error('Song preparation failed:', error);
       cancelCassette();
+      cassette.cancel();
       setInserting(false);
       setFailed(true);
     });
@@ -67,7 +66,7 @@ export default function LoadingScreen() {
       // accepted upload was really abandoned, rather than on effect teardown.
       queueMicrotask(() => {
         if (pendingUpload === request && useGameStore.getState().screen !== 'loading') {
-          request.abort.abort(); clearUpload(request); cancelCassette();
+          request.abort.abort(); clearUpload(request); cancelCassette(); cassette.cancel();
         }
       });
     };

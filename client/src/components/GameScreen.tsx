@@ -5,6 +5,7 @@ import { useGameStore } from '../store/gameStore';
 import { DIFFICULTY_PRESETS } from '../types/game';
 import Game from '../game/Game';
 import { playRecorder } from '../game/anim/recorder';
+import { cassette } from '../audio/cassetteSfx';
 import { sfx } from '../audio/sfx';
 
 import type { GameSoundEvent } from '../game/Game';
@@ -214,7 +215,7 @@ export default function GameScreen() {
     lastDrainTimeRef.current = 0;
 
     playRecorder(true, performance.now());
-    sfx.cassettePlay();
+    cassette.play();
     setIsPlaying(true);
     setPhase('playing');
   }, [audioBuffer, clearFailTimeout, finalizeRun, setPhase, setRunOutcome, volume]);
@@ -303,10 +304,12 @@ export default function GameScreen() {
     if (phase === 'playing') {
       audioContextRef.current?.suspend();
       playRecorder(false, performance.now());
+      cassette.stop();
       setPhase('paused');
     } else if (phase === 'paused') {
       audioContextRef.current?.resume();
       playRecorder(true, performance.now());
+      cassette.play();
       setPhase('playing');
     }
   }, [phase, setPhase]);
