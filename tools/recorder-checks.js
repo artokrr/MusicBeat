@@ -27,7 +27,7 @@
     }
     maxVisible = Math.max(maxVisible, visible);
   }
-  check(maxVisible <= NOTE_CAPACITY && emissions > 10, 'Sparse pool must emit with capacity two');
+  check(maxVisible <= NOTE_CAPACITY && emissions > 10, 'Sparse pool must emit within its capacity');
   check(minimumGap >= .55, 'Emission spacing below 550 ms');
   check(refs[0] === pool.positions && refs[1] === pool.opacity && refs[2] === pool.shapes && refs[3] === pool.colors, 'Pool buffers changed');
   frame.playing = false; pool.update(frame);

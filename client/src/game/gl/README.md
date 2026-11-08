@@ -202,11 +202,14 @@ node tools/shot.mjs --url http://localhost:3150/ --port 9464 --out tools/out/rec
 python3 tools/recorder-artifacts.py
 ```
 
-`scene/recorder-notes.ts` owns a two-slot, typed-buffer plume shared by GL and
-CPU. Beatmap onsets trigger a seeded selection with a 0.65–1.30 second gap;
-notes live 1.65 seconds, rise 27 cm and drift a few centimetres left. Three- and
-five-pixel-wide quavers use a five-pixel height, the existing Bayer dissolve,
-muted cream-grey ink and grille lighting/haze. They write into the scene depth
+`scene/recorder-notes.ts` owns a three-slot, typed-buffer plume shared by GL and
+CPU. Beatmap onsets trigger a seeded selection with a 0.45–0.95 second gap;
+notes are born just above the recorder's speaker (right) side, live 1.65
+seconds, rise 42 cm and drift a few centimetres right, away from the judgement
+text. A single quaver or a beamed pair, 5×7 native pixels, uses the existing
+Bayer dissolve, a muted warm-grey ink darker than the lamp-lit snow, and
+grille lighting/haze. (Five-pixel cream glyphs born inside the body's
+silhouette were invisible in captures: over the dark casing or as one more flake.) They write into the scene depth
 buffer, never an overlay. Pause, countdown, menus and failure clear the pool.
 Only the recorder emits these glyphs; the stranger remains untouched.
 

@@ -19,9 +19,11 @@ Blender and the CPU fallback. Blender 5.2.3 regenerated the GLB, then
 `node tools/compress-models.mjs` regenerated its gzip companion.
 
 Notes use beatmap onsets regardless of whether the player hits them. Seeded
-thinning and a 0.65–1.30 s minimum interval keep at most two alive. Each lives
-1.65 s, rises 27 cm, and drifts a few centimetres. Single/paired glyphs occupy
-3–5 by 5 native pixels. They use the existing Bayer dissolve and depth buffer;
+thinning and a 0.45–0.95 s minimum interval keep at most three alive. Each is
+born just above the speaker side, lives 1.65 s, rises 42 cm, and drifts a few
+centimetres right. Single/paired glyphs occupy 5 by 7 native pixels in a muted
+warm grey darker than the lit snow (review revision: the first 5-pixel cream
+version was not visible in gameplay captures). They use the existing Bayer dissolve and depth buffer;
 lighting and haze are sampled once at the grille. Countdown, pause, menus and
 failure clear the pool. Nothing is emitted near the stranger.
 

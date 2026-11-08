@@ -1,6 +1,6 @@
 import { bayer } from './engine3d';
 import { project } from '../scene/camera';
-import { NOTE_CAPACITY, NOTE_MASKS, RecorderNotes } from '../scene/recorder-notes';
+import { NOTE_CAPACITY, NOTE_MASKS, NOTE_SIZE, RecorderNotes } from '../scene/recorder-notes';
 import type { Renderer3D, Vec3 } from './engine3d';
 import type { SceneFrame } from '../scene/types';
 
@@ -15,9 +15,9 @@ export class CPURecorderNotes {
       if (alpha <= 0) continue;
       for (let j = 0; j < 3; j++) this.point[j] = this.pool.positions[at + j];
       const p = project(this.point, this.projected);
-      const left = Math.floor(p.sx - 2), top = Math.floor(p.sy - 2);
-      for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
-        if (!(NOTE_MASKS[this.pool.shapes[i] * 5 + y] & (1 << x))) continue;
+      const left = Math.floor(p.sx - 3), top = Math.floor(p.sy - 3);
+      for (let y = 0; y < NOTE_SIZE; y++) for (let x = 0; x < NOTE_SIZE; x++) {
+        if (!(NOTE_MASKS[this.pool.shapes[i] * NOTE_SIZE + y] & (1 << x))) continue;
         const sx = left + x, sy = top + y, pixel = sy * 384 + sx;
         if (sx < 0 || sx >= 384 || sy < 0 || sy >= 216 || p.d <= R.zb[pixel] || bayer(sx, sy) >= alpha) continue;
         R.zb[pixel] = p.d;

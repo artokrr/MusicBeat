@@ -1,10 +1,10 @@
 import { BufferGeometry, BufferAttribute, DynamicDrawUsage, GLSL3, Points, ShaderMaterial } from 'three';
 import { pixelNoise } from './material';
-import { NOTE_MASKS, RecorderNotes } from '../scene/recorder-notes';
+import { NOTE_MASKS, NOTE_SIZE, RecorderNotes } from '../scene/recorder-notes';
 import type { Scene } from 'three';
 import type { SceneFrame } from '../scene/types';
 
-/** Five native pixels, in the same depth buffer as the courtyard and snow. */
+/** NOTE_SIZE native pixels, in the same depth buffer as the courtyard and snow. */
 export class WorldRecorderNotes {
   readonly pool = new RecorderNotes();
   readonly mesh: Points<BufferGeometry, ShaderMaterial>;
@@ -26,7 +26,7 @@ export class WorldRecorderNotes {
         void main() {
           alpha=opacity; glyph=int(shape); ink=color;
           gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);
-          gl_PointSize=5.;
+          gl_PointSize=${NOTE_SIZE}.;
           if(alpha<=0.) gl_Position=vec4(2.,2.,2.,1.);
         }`,
       fragmentShader: `
@@ -37,9 +37,9 @@ export class WorldRecorderNotes {
         layout(location=1) out vec4 outSurface;
         ${pixelNoise}
         void main() {
-          ivec2 p=ivec2(floor(gl_PointCoord*5.));
-          const int rows[10]=int[10](${Array.from(NOTE_MASKS).join(',')});
-          if((rows[glyph*5+p.y] & (1<<p.x))==0) discard;
+          ivec2 p=ivec2(floor(gl_PointCoord*${NOTE_SIZE}.));
+          const int rows[${NOTE_MASKS.length}]=int[${NOTE_MASKS.length}](${Array.from(NOTE_MASKS).join(',')});
+          if((rows[glyph*${NOTE_SIZE}+p.y] & (1<<p.x))==0) discard;
           if(bayer(vec2(floor(gl_FragCoord.x),215.-floor(gl_FragCoord.y)))>=alpha) discard;
           outColor=vec4(ink,1.);
           outSurface=vec4(.5,.5,1.,.75);
