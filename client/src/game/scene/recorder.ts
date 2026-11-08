@@ -1,14 +1,21 @@
 import parts from './recorder-parts.json';
-import { RECORDER_X, RECORDER_Y } from '../anim/recorder';
-import type { recorder } from '../anim/recorder';
+import { RECORDER_X, RECORDER_Y, recorder } from '../anim/recorder';
 import type { RGB } from '../pixel/engine3d';
 
 export const recorderParts = parts;
 export type RecorderState = typeof recorder;
 export interface RecorderBox { center: number[]; size: number[]; color: number[]; group: number }
 const moving = parts.filter(p => p.group !== 0);
-// A second shell (without turning hubs) is the previously ejected cassette.
-export const movingParts: RecorderBox[] = [...moving, ...parts.filter(p => p.group >= 2 && p.group <= 4).map(p => ({ ...p, group: p.group + 4 }))];
+// One fixed instance pool, shared by GL and CPU; allocation happens only at setup.
+const labels = [[171,160,122], [129,148,158], [181,178,160], [167,139,139], [143,155,140], [158,149,130], [143,145,163]];
+export const movingParts: RecorderBox[] = [...moving];
+export const PILE_START = moving.length;
+const shell = parts.filter(p => p.group >= 2 && p.group <= 4);
+export const TAPE_PARTS = shell.length;
+for (let i = 0; i < recorder.tapes.length; i++) for (const p of shell) {
+  movingParts.push({ ...p, group: 6 + i * 3 + p.group - 2,
+    color: p.name.startsWith('tape_label') ? labels[i] : p.color });
+}
 
 /** Same authored silhouette for the CPU and asset-loading fallback. */
 export function paintRecorderBody(R: { box(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, c: RGB): void }) {
@@ -23,6 +30,7 @@ export function paintRecorderBody(R: { box(x0: number, y0: number, z0: number, x
 /** Fixed instance matrices, also consumed by the CPU rasterizer. */
 export class RecorderBoxes {
   readonly matrices = new Float32Array(movingParts.length * 16);
+  readonly snow = new Float32Array(movingParts.length);
   readonly visible = new Uint8Array(movingParts.length);
   private readonly shape = new Float64Array(movingParts.length * 7);
   constructor() {
@@ -35,6 +43,8 @@ export class RecorderBoxes {
       this.shape[at + 6] = p.group;
     }
   }
+  private readonly lastPose = new Float64Array(recorder.tapes.length * 9).fill(NaN);
+  private readonly dirty = new Uint8Array(recorder.tapes.length);
   private settled = false;
   private lastStart = -Infinity;
   private lastKey = -1;
@@ -59,31 +69,54 @@ export class RecorderBoxes {
     }
   }
   update(s: RecorderState) {
+    // Resting shells do not change orientation as snow falls. Cache their transforms;
+    // update only the snow attribute and vertical translation during sinking.
+    for (let i = 0; i < s.tapes.length; i++) {
+      const t = s.tapes[i], p = i * 9, last = this.lastPose;
+      const active = t.active ? 1 : 0;
+      const changed = last[p] !== t.x || last[p+1] !== t.y || last[p+3] !== t.tilt ||
+        last[p+4] !== t.roll || last[p+5] !== t.yaw || last[p+6] !== t.scale || last[p+7] !== active;
+      this.dirty[i] = changed ? 1 : 0;
+      const start = PILE_START + i * TAPE_PARTS, end = start + TAPE_PARTS;
+      for (let j = start; j < end; j++) this.snow[j] = t.snow;
+      if (!changed && active && last[p+2] !== t.z) {
+        const dz = t.z - last[p+2];
+        for (let j = start; j < end; j++) this.matrices[j*16+14] += dz;
+      }
+      last[p]=t.x; last[p+1]=t.y; last[p+2]=t.z; last[p+3]=t.tilt;
+      last[p+4]=t.roll; last[p+5]=t.yaw; last[p+6]=t.scale; last[p+7]=active;
+    }
     if (!s.inserting && s.loaded && this.settled && s.startedMs === this.lastStart && s.key === this.lastKey && s.door === 0) {
       this.spin(s.reel);
+      this.transform(s, PILE_START);
       return;
     }
     this.transform(s);
   }
-  private transform(s: RecorderState) {
+  private transform(s: RecorderState, first = 0) {
     const shape = this.shape;
-    for (let i = 0; i < movingParts.length; i++) {
+    for (let i = first; i < movingParts.length; i++) {
       const offset = i * 7, group = shape[offset + 6], old = group >= 6;
+      if (old && !this.dirty[Math.floor((group - 6) / 3)]) continue;
+      const fallen = old ? s.tapes[Math.floor((group - 6) / 3)] : null;
+      const localGroup = old ? (group - 6) % 3 + 2 : group;
+      this.snow[i] = fallen ? fallen.snow : 0;
       let x = RECORDER_X, y = RECORDER_Y, z = 0, tilt = 0, roll = 0, yaw = 0, scale = 1;
       let cx = shape[offset], cy = shape[offset + 1], cz = shape[offset + 2], spin = 0;
       const tape = group === 2 || group === 3 || group === 4 || old;
-      this.visible[i] = !tape || (old ? s.oldVisible : s.loaded || s.inserting) ? 1 : 0;
+      this.visible[i] = !tape || (fallen ? fallen.active : s.loaded || s.inserting) ? 1 : 0;
+      if (!this.visible[i]) { this.matrices[i * 16 + 14] = -100; continue; }
       if (group === 1) { x += .12; y -= .0915; z = .0945; tilt = s.door * 1.05; }
       else if (group === 5) z = -s.key * .0195;
       else if (tape) {
-        x = old ? s.oldX : s.tapeX; y = old ? s.oldY : s.tapeY; z = old ? s.oldZ : s.tapeZ;
-        tilt = old ? s.oldTilt : s.tapeTilt; roll = old ? 0 : s.tapeRoll; yaw = old ? -.25 : s.tapeYaw;
-        scale = old ? 1 : s.tapeScale;
-        if (group === 3 || group === 4 || group === 7 || group === 8) {
+        x = fallen ? fallen.x : s.tapeX; y = fallen ? fallen.y : s.tapeY; z = fallen ? fallen.z : s.tapeZ;
+        tilt = fallen ? fallen.tilt : s.tapeTilt; roll = fallen ? fallen.roll : s.tapeRoll; yaw = fallen ? fallen.yaw : s.tapeYaw;
+        scale = fallen ? fallen.scale : s.tapeScale;
+        if (localGroup === 3 || localGroup === 4) {
           spin = old ? 0 : s.reel * (group === 3 ? 1 : .83);
           const rx = cx * Math.cos(spin) + cz * Math.sin(spin);
           cz = -cx * Math.sin(spin) + cz * Math.cos(spin);
-          cx = rx + (group === 3 || group === 7 ? -.0405 : .0405);
+          cx = rx + (localGroup === 3 ? -.0405 : .0405);
         }
       }
       // Rz * Ry * Rx: a small tumble, with the front of the tape facing camera.

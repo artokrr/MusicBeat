@@ -11,7 +11,7 @@
 import {
   DOOR_SHUT_START_MS, EJECT_END_MS, EJECT_START_MS, FLIGHT_END_MS, FLIGHT_START_MS, INSERT_MS,
   RECORDER_X, RECORDER_Y, REWIND_END_MS, REWIND_LATCH_MS, REWIND_STOP_MS,
-  doorAt, oldTapeAt, rewindSpeedAt, tapeAt,
+  doorAt, oldTapeAt, rewindSpeedAt, tapeAt, recorder,
 } from '../game/anim/recorder';
 import { project } from '../game/scene/camera';
 import { LOW_W } from '../game/pixel/stage';
@@ -149,7 +149,7 @@ function playAt(c: AudioContext, out: AudioNode, buffer: AudioBuffer | undefined
 }
 
 const pose = { tapeX: 0, tapeY: 0, tapeZ: 0, tapeScale: 1, tapeTilt: 0, tapeRoll: 0, tapeYaw: 0 };
-const oldPose = { oldX: 0, oldY: 0, oldZ: 0, oldTilt: 0 };
+const oldPose = { serial: 0, x: 0, y: 0, z: 0, tilt: 0, roll: 0, yaw: 0, scale: 1 };
 
 /**
  * When something easing to a stop stops visibly moving: within a quarter pixel
@@ -167,7 +167,8 @@ function settledMs(from: number, to: number, at: (ms: number) => [number, number
   return to;
 }
 const seatedMs = () => settledMs(FLIGHT_START_MS, FLIGHT_END_MS, ms => (tapeAt(ms, pose), [pose.tapeX, pose.tapeY, pose.tapeZ]));
-const landedMs = () => settledMs(EJECT_START_MS, EJECT_END_MS, ms => (oldTapeAt(ms, oldPose), [oldPose.oldX, oldPose.oldY, oldPose.oldZ]));
+// The crunch is first contact, while the shell still slides horizontally.
+const landedMs = () => EJECT_END_MS;
 
 /** Likewise for the door: shut to within about two degrees of its swing. */
 function doorShutMs(): number {
@@ -324,8 +325,9 @@ function scheduleInsert(c: AudioContext, out: AudioNode, run: Run, replacing: bo
   if (replacing) {
     playAt(c, out, buffers.eject, TAKES.eject.sync, t(EJECT_START_MS), { gain: 0.6, pan: deck, lowpass: 7000 }, live);
     const landed = landedMs();
+    for (const tape of recorder.tapes) if (tape.startedMs === startedMs) oldPose.serial = tape.serial;
     oldTapeAt(landed, oldPose);
-    playAt(c, out, buffers.snow, TAKES.snow.sync, t(landed), { gain: 1.1, pan: panOf(oldPose.oldX, oldPose.oldY, oldPose.oldZ), lowpass: 6000 }, live);
+    playAt(c, out, buffers.snow, TAKES.snow.sync, t(landed), { gain: 1.1, pan: panOf(oldPose.x, oldPose.y, oldPose.z), lowpass: 6000 }, live);
   }
   whoosh(c, out, startedMs, live);
   const seated = t(seatedMs());
