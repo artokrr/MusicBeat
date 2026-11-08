@@ -4,7 +4,7 @@
 // repeats never sound identical. Everything runs through one shared
 // AudioContext, a touch of room and a gentle compressor.
 
-import { dullTock, paddleTock, roomImpulse, swish } from './sfxSynth';
+import { cassetteClick, dullTock, paddleTock, roomImpulse, swish } from './sfxSynth';
 
 import type { HitResult } from '../types/game';
 import type { LaneIndex, NoteType } from '../types/beatmap';
@@ -29,7 +29,7 @@ let bus: GainNode | null = null;
 let volume = 0.8;
 const banks: Partial<Record<Bank, AudioBuffer[]>> = {};
 const nextTake: Record<Bank, number> = { paddle: 0, smash: 0, table: 0, floor: 0, drop: 0 };
-let fallback: { tock: AudioBuffer; dull: AudioBuffer; swish: AudioBuffer } | null = null;
+let fallback: { tock: AudioBuffer; dull: AudioBuffer; swish: AudioBuffer; cassette: AudioBuffer } | null = null;
 let variation = 0;
 
 function context(): AudioContext | null {
@@ -73,7 +73,7 @@ function context(): AudioContext | null {
       buffer.copyToChannel(data as Float32Array<ArrayBuffer>, 0);
       return buffer;
     };
-    fallback = { tock: make(paddleTock(sr)), dull: make(dullTock(sr)), swish: make(swish(sr)) };
+    fallback = { cassette: make(cassetteClick(sr)), tock: make(paddleTock(sr)), dull: make(dullTock(sr)), swish: make(swish(sr)) };
     void loadBanks(ctx);
   }
   if (ctx.state === 'suspended') void ctx.resume();
@@ -155,6 +155,14 @@ function paddleHit(options: PlayOptions, bank: Bank = 'paddle') {
 }
 
 export const sfx = {
+  cassetteDoor() {
+    const c = context();
+    if (c && fallback) playBuffer(c, fallback.cassette, { gain: .28, pan: .45, rate: .7 });
+  },
+  cassettePlay() {
+    const c = context();
+    if (c && fallback) playBuffer(c, fallback.cassette, { gain: .2, pan: .45 });
+  },
   /** Creates/resumes the audio context; call from a user gesture. */
   unlock() {
     context();

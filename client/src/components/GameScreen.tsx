@@ -4,6 +4,7 @@ import MenuControls from './MenuControls';
 import { useGameStore } from '../store/gameStore';
 import { DIFFICULTY_PRESETS } from '../types/game';
 import Game from '../game/Game';
+import { playRecorder } from '../game/anim/recorder';
 import { sfx } from '../audio/sfx';
 
 import type { GameSoundEvent } from '../game/Game';
@@ -66,6 +67,7 @@ export default function GameScreen() {
   }, []);
 
   const closeAudio = useCallback(() => {
+    playRecorder(false, performance.now());
     if (audioContextRef.current && clockRunningRef.current) {
       stoppedTimeRef.current = audioContextRef.current.currentTime - startTimeRef.current;
     }
@@ -108,6 +110,7 @@ export default function GameScreen() {
     clockRunningRef.current = false;
     setFailStartMs(performance.now());
     sfx.fail();
+    playRecorder(false, performance.now());
     setRunOutcome(reason);
     setIsPlaying(false);
     setPhase('ended');
@@ -210,6 +213,8 @@ export default function GameScreen() {
     clockRunningRef.current = true;
     lastDrainTimeRef.current = 0;
 
+    playRecorder(true, performance.now());
+    sfx.cassettePlay();
     setIsPlaying(true);
     setPhase('playing');
   }, [audioBuffer, clearFailTimeout, finalizeRun, setPhase, setRunOutcome, volume]);
@@ -297,9 +302,11 @@ export default function GameScreen() {
   const togglePause = useCallback(() => {
     if (phase === 'playing') {
       audioContextRef.current?.suspend();
+      playRecorder(false, performance.now());
       setPhase('paused');
     } else if (phase === 'paused') {
       audioContextRef.current?.resume();
+      playRecorder(true, performance.now());
       setPhase('playing');
     }
   }, [phase, setPhase]);

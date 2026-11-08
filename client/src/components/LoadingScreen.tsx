@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 
-import { prepareSongInBackground } from '../audio/analyzeInBackground';
+import { pendingUpload, clearUpload } from '../audio/songUpload';
+import { recorder, cancelCassette, sampleRecorder } from '../game/anim/recorder';
+import { sfx } from '../audio/sfx';
 import { at, u } from '../game/pixel/layout';
 import PxText from '../game/pixel/PxText';
 import { useGameStore } from '../store/gameStore';
@@ -14,59 +16,64 @@ export default function LoadingScreen() {
   const [warning, setWarning] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
-  const audioBuffer = useGameStore((state) => state.audioBuffer);
+  const [inserting, setInserting] = useState(recorder.inserting);
+  const setAudioBuffer = useGameStore((state) => state.setAudioBuffer);
   const songTitle = useGameStore((state) => state.songTitle);
   const setBeatmap = useGameStore((state) => state.setBeatmap);
   const setScreen = useGameStore((state) => state.setScreen);
 
   useEffect(() => {
-    if (!audioBuffer) {
-      setScreen('upload');
-      return;
-    }
-
-    // A newer upload (or leaving this screen) supersedes this run: its results
-    // must not overwrite the newer song's beatmap or reopen gameplay.
+    const request = pendingUpload;
+    if (!request) { setScreen('upload'); return; }
     let cancelled = false;
-    const abort = new AbortController();
-    let startTimer: number | undefined;
-    const current = () => !cancelled && useGameStore.getState().audioBuffer === audioBuffer;
-
-    const analyze = async () => {
-      try {
-        setWarning(null);
-        setProgress(20);
-
-        const prepared = await prepareSongInBackground(audioBuffer, abort.signal);
-        if (!current()) return;
-        if (prepared.usedFallback) {
-          setWarning('simple mode');
+    let prepared = false;
+    let readyAt = Infinity;
+    let clunked = false;
+    const current = () => !cancelled && pendingUpload === request;
+    // Sampling and preparation are independent. The gate is checked even when
+    // rendering was suspended in a background tab, using the same time origin.
+    const gate = window.setInterval(() => {
+      if (!current()) return;
+      sampleRecorder(performance.now());
+      if (!recorder.inserting) {
+        setInserting(false);
+        if (!clunked && recorder.loaded) { clunked = true; sfx.cassetteDoor(); }
+        if (prepared && performance.now() >= readyAt) {
+          clearUpload(request);
+          setScreen('playing');
         }
-        setProgress(60);
-
-        setProgress(100);
-
-        setBeatmap(prepared.beatmap);
-
-        startTimer = window.setTimeout(() => {
-          if (current()) setScreen('playing');
-        }, 500);
-      } catch (error) {
-        if (!current()) return;
-        console.error('Analysis failed:', error);
-        setFailed(true);
       }
-    };
-
-    analyze();
+    }, 30);
+    setProgress(20);
+    request.result.then(result => {
+      if (!current()) return;
+      if (result.usedFallback) setWarning('simple mode');
+      setAudioBuffer(result.audioBuffer);
+      setBeatmap(result.beatmap);
+      setProgress(100);
+      prepared = true;
+      readyAt = performance.now() + 500;
+    }).catch(error => {
+      if (!current()) return;
+      console.error('Song preparation failed:', error);
+      cancelCassette();
+      setInserting(false);
+      setFailed(true);
+    });
     return () => {
       cancelled = true;
-      abort.abort();
-      window.clearTimeout(startTimer);
+      window.clearInterval(gate);
+      // StrictMode may remount this effect immediately; abort only if the
+      // accepted upload was really abandoned, rather than on effect teardown.
+      queueMicrotask(() => {
+        if (pendingUpload === request && useGameStore.getState().screen !== 'loading') {
+          request.abort.abort(); clearUpload(request); cancelCassette();
+        }
+      });
     };
-  }, [audioBuffer, setBeatmap, setScreen]);
+  }, [setAudioBuffer, setBeatmap, setScreen]);
 
-  // Only interpolate the presentation; analysis and screen timing stay untouched.
+  // Interpolate only the progress display; preparation never waits for it.
   useEffect(() => {
     const timer = window.setInterval(() => {
       setDisplayProgress((value) => Math.min(progress, value + 5));
@@ -77,8 +84,8 @@ export default function LoadingScreen() {
   const filled = Math.floor((displayProgress / 100) * SEGMENTS);
 
   return (
-    <SceneBackdrop dim={0.55}>
-      <div style={at(0, 92, styles.column)}>
+    <SceneBackdrop dim={inserting ? 0 : 0.55}>
+      <div style={{ ...at(0, 92, styles.column), visibility: inserting ? 'hidden' : 'visible' }}>
         <PxText className="px-loading-title" text={songTitle || 'untitled'} style={{ color: 'var(--rose)' }} />
         {failed && <PxText text="error" style={{ color: 'var(--miss)' }} />}
         {warning && <PxText text={warning} style={{ color: 'var(--warm)' }} />}

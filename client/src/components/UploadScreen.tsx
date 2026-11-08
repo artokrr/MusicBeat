@@ -1,5 +1,8 @@
 import { useRef, useState } from 'react';
 
+import { prepareUpload } from '../audio/songUpload';
+import { sfx } from '../audio/sfx';
+import { insertCassette } from '../game/anim/recorder';
 import { at, u } from '../game/pixel/layout';
 import PxText from '../game/pixel/PxText';
 import { LOW_W } from '../game/pixel/stage';
@@ -10,6 +13,7 @@ import SceneBackdrop from './SceneBackdrop';
 
 export default function UploadScreen() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const accepted = useRef(false);
   const [dragOver, setDragOver] = useState(false);
 
   const setScreen = useGameStore((state) => state.setScreen);
@@ -21,29 +25,22 @@ export default function UploadScreen() {
   const musicVolume = useGameStore((state) => state.musicVolume);
   const setMusicVolume = useGameStore((state) => state.setMusicVolume);
 
-  const handleFile = async (file: File) => {
+  const handleFile = (file: File) => {
+    if (accepted.current) return;
     if (!file.type.startsWith('audio/')) {
       alert('Please upload an audio file (MP3, WAV, OGG)');
       return;
     }
-
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const audioContext = new AudioContext();
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      await audioContext.close();
-
-      const cleanedTitle = file.name.replace(/\.[^/.]+$/, '');
-      resetScore();
-      setPhase('countdown');
-      setBeatmap(null);
-      setSongTitle(cleanedTitle);
-      setAudioBuffer(audioBuffer);
-      setScreen('loading');
-    } catch (error) {
-      console.error('Failed to decode audio:', error);
-      alert('Failed to load audio file. Please try a different file.');
-    }
+    accepted.current = true;
+    sfx.unlock();
+    insertCassette(performance.now());
+    prepareUpload(file);
+    resetScore();
+    setPhase('countdown');
+    setBeatmap(null);
+    setAudioBuffer(null);
+    setSongTitle(file.name.replace(/\.[^/.]+$/, ''));
+    setScreen('loading');
   };
 
   const handleDrop = (e: React.DragEvent) => {

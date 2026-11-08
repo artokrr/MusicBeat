@@ -122,3 +122,11 @@ export function roomImpulse(sampleRate: number, channel: number): Float32Array {
   }
   return out;
 }
+
+/** Dry plastic latch and spring, deliberately much quieter than a paddle hit. */
+export function cassetteClick(sampleRate: number): Float32Array {
+  const rnd = noise(81);
+  return render(sampleRate, .065, t =>
+    rnd() * Math.exp(-t / .003) + .35 * Math.sin(TAU * 270 * t) * Math.exp(-t / .014)
+    + (t > .021 ? .23 * rnd() * Math.exp(-(t-.021)/.004) : 0), .55);
+}
