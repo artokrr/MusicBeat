@@ -106,20 +106,40 @@ try {
     const sfxModule=await import(sfxURL);
     Object.assign(window,{__store:store,__recorder:recorder,__cassette:cassette,__sfx:sfxModule.sfx,__sfxOutput:sfxModule.sfxOutput});
     let last={};
-    const watch=()=>{const s=store.getState(),r=recorder;const e={screen:s.screen,phase:s.phase,inserting:r.inserting,loaded:r.loaded,key:r.key,playing:r.playing,startedMs:r.startedMs,rewindStartedMs:r.rewindStartedMs};
+    const watch=()=>{const s=store.getState(),r=recorder;const e={screen:s.screen,phase:s.phase,ejectMoving:r.tapes.some(t=>t.active&&performance.now()-t.startedMs>100&&performance.now()-t.startedMs<820),ejectLanded:r.tapes.some(t=>t.active&&t.startedMs===r.startedMs&&t.landed),inserting:r.inserting,loaded:r.loaded,key:r.key,playing:r.playing,startedMs:r.startedMs,rewindStartedMs:r.rewindStartedMs};
       if(Object.keys(e).some(k=>e[k]!==last[k]))window.__capture.events.push({ms:performance.now(),epoch:Date.now()/1000,...e});last=e;requestAnimationFrame(watch)};watch();
     // Clapperboard: a white frame and a click started in the same animation frame, on the sfx context.
-    window.__clap=()=>new Promise(done=>requestAnimationFrame(()=>{
-      const c=window.__sfxOutput().context,d=document.createElement('div');
-      d.style.cssText='position:fixed;inset:0;background:#fff;z-index:99999';document.body.appendChild(d);
-      const o=c.createOscillator(),g=c.createGain();o.frequency.value=1500;g.gain.setValueAtTime(.4,c.currentTime);g.gain.setValueAtTime(0,c.currentTime+.012);
-      o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.03);
-      const s=c.getOutputTimestamp();window.__capture.claps.push({perf:performance.now(),epoch:Date.now()/1000,currentTime:c.currentTime,contextTime:s.contextTime,performanceTime:s.performanceTime,outputLatency:c.outputLatency,baseLatency:c.baseLatency});
-      requestAnimationFrame(()=>requestAnimationFrame(()=>{d.remove();done()}));
-    }));
+    window.__clap=()=>new Promise(done=>{
+      const output=window.__sfxOutput(),c=output.context,s=c.getOutputTimestamp();
+      const target=performance.now()+120,at=s.contextTime+(target-s.performanceTime)/1000;
+      const o=c.createBufferSource(),g=c.createGain(),buffer=c.createBuffer(1,Math.round(c.sampleRate*.30),c.sampleRate);
+      const data=buffer.getChannelData(0);for(let i=0;i<c.sampleRate*.012;i++)data[i]=Math.sin(i/c.sampleRate*Math.PI*3000);o.buffer=buffer;
+      g.gain.setValueAtTime(.4,at);g.gain.setValueAtTime(0,at+.012);
+      o.connect(g);g.connect(output.bus);o.start(at);o.stop(at+.03);
+      window.__capture.claps.push({perf:target,epoch:Date.now()/1000+.120,scheduled:true,currentTime:c.currentTime,contextTime:s.contextTime,performanceTime:s.performanceTime});
+      const show=()=>{if(performance.now()<target){requestAnimationFrame(show);return;}
+        const d=document.createElement('div');d.style.cssText='position:fixed;inset:0;background:#fff;z-index:99999';document.body.appendChild(d);
+        requestAnimationFrame(()=>requestAnimationFrame(()=>{d.remove();done()}));
+      };requestAnimationFrame(show);
+    });
   })()`);
   const isCassette = Object.values(CASSETTE).map(d => `d===${d}`).join('||');
   if (pass === 'measure') await evaluate(`window.__allow=d=>${isCassette}`);
+  if (pass === 'measure') await evaluate(`(()=>{
+    // Stamp the state of the frame actually copied to the presentation canvas.
+    // Two tiny corner markers are capture-only; neither modifies game state.
+    const draw=CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage=function(source,...args){
+      const result=draw.call(this,source,...args);
+      if(this.canvas===document.querySelector('canvas')&&source.width===384&&source.height===216){
+        const tape=__recorder.tapes.find(t=>t.active&&t.startedMs===__recorder.startedMs);
+        this.save();this.globalAlpha=1;
+        this.fillStyle=tape&&Math.abs(tape.x-2.47)>1e-7?'#ff00ff':'#000000';this.fillRect(380,212,2,2);
+        this.fillStyle=tape&&tape.landed?'#00ff00':'#000000';this.fillRect(382,212,2,2);this.restore();
+      }return result;
+    };__capture.frameMarkers=true;
+  })()`);
+
   await evaluate('__startAudio()');
   // The way a player arrives: the pointer moves over the drop zone, which wakes the audio.
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 192, y: 130 });

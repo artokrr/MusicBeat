@@ -3,7 +3,7 @@ import {build} from '../node_modules/vite/node_modules/esbuild/lib/main.js';
 import {writeFileSync,mkdirSync} from 'node:fs';
 import assert from 'node:assert/strict';
 mkdirSync('tools/out',{recursive:true});
-await build({stdin:{contents:`export * from './client/src/game/anim/recorder';export * from './client/src/game/scene/recorder';`,resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:'tools/out/cassette-fixture.mjs'});
+await build({stdin:{contents:`export * from './client/src/game/anim/recorder';export * from './client/src/game/scene/recorder';`,resolveDir:process.cwd()},define:{'import.meta.env.DEV':'false'},bundle:true,platform:'node',format:'esm',outfile:'tools/out/cassette-fixture.mjs'});
 const {recorder:r,insertCassette,sampleRecorder,playRecorder,cancelCassette,RecorderBoxes,rewindRecorder,cancelRewind,rewindSpeedAt,REWIND_LATCH_MS,REWIND_STOP_MS,REWIND_END_MS,REWIND_RAD_S}=await import('./out/cassette-fixture.mjs');
 const boxes=new RecorderBoxes(),matrices=boxes.matrices,visible=boxes.visible;
 insertCassette(1000);
@@ -12,12 +12,12 @@ assert.equal(sampleRecorder(1000),r);
 assert.ok(r.tapeScale>7);
 for(let t=1000;t<2450;t+=5){sampleRecorder(t);boxes.update(r);assert.equal(r.loaded,false);assert.ok(boxes.matrices.every(Number.isFinite));}
 sampleRecorder(2450);assert.equal(r.loaded,true);assert.equal(r.inserting,false);assert.equal(r.door,0);assert.equal(r.tapeScale,1);
-assert.ok(Math.abs(r.tapeZ-.125)<1e-12);
+assert.ok(Math.abs(r.tapeZ-.1875)<1e-12);
 playRecorder(true,2500);sampleRecorder(3000);const turning=r.reel;assert.ok(turning>0);assert.equal(r.key,1);
 playRecorder(false,3000);sampleRecorder(9000);assert.equal(r.reel,turning);assert.equal(r.key,0);
 playRecorder(true,9000);sampleRecorder(9500);assert.notEqual(r.reel,turning);
 insertCassette(10000);assert.equal(r.oldVisible,true);assert.equal(r.playing,false);
-sampleRecorder(11450);assert.equal(r.loaded,true);assert.ok(r.oldZ<.02);assert.ok(r.oldY<r.tapeY);
+sampleRecorder(11450);assert.equal(r.loaded,true);assert.ok(r.tapes[0].z<.022);assert.ok(r.tapes[0].y<r.tapeY);
 for(let i=0;i<10000;i++){sampleRecorder(11450+i*16.67);boxes.update(r);}
 assert.equal(boxes.matrices,matrices);assert.equal(boxes.visible,visible);
 // The seated fast path must match a fresh full transform, including both hubs.
