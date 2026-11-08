@@ -277,6 +277,8 @@ void main() {
   if(i>=contactCount) break;
   vec2 delta=p.xy-contactBalls[i].xy;
   #ifdef PREMIUM_LOOK
+  // Reject distant pixels before height/falloff math (many simultaneous balls).
+  if(abs(p.z-contactBalls[i].z)>=.01 || any(greaterThan(abs(delta),vec2(.052)))) continue;
   float height=contactBalls[i].w;
   float radius=mix(.038,.052,clamp(height/.8,0.,1.));
   float fade=1.-smoothstep(.45,1.8,height);
