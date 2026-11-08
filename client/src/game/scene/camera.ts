@@ -23,3 +23,20 @@ export function project(p: Vec3, out: Projected = { sx: 0, sy: 0, d: 0 }): Proje
   out.d = -(x * VIEW_FORWARD[0] + y * VIEW_FORWARD[1] + z * VIEW_FORWARD[2]);
   return out;
 }
+
+/** Opening-only camera. CAMERA and the gameplay projection never change. */
+export const INTRO_HOLD_MS = 2000;
+export const INTRO_MOVE_MS = 4500;
+const introCamera: CameraOptions = { ...CAMERA, target: [0, 0, 0] };
+export function openingCamera(progress: number): CameraOptions {
+  const t = Math.max(0, Math.min(1, progress));
+  const eased = t * t * t * (t * (t * 6 - 15) + 10);
+  const remaining = 1 - eased;
+  introCamera.scale = CAMERA.scale + (24 - CAMERA.scale) * remaining;
+  introCamera.yaw = CAMERA.yaw + (.08 - CAMERA.yaw) * remaining;
+  introCamera.pitch = CAMERA.pitch + (-.12 - CAMERA.pitch) * remaining;
+  introCamera.target[0] = CAMERA.target[0] + (4 - CAMERA.target[0]) * remaining;
+  introCamera.target[1] = CAMERA.target[1] + (4.6 - CAMERA.target[1]) * remaining;
+  introCamera.target[2] = CAMERA.target[2] + (9 - CAMERA.target[2]) * remaining;
+  return introCamera;
+}

@@ -21,6 +21,8 @@ export interface LaneView {
 export interface SceneFrame {
   /** Presentation clock, in milliseconds; never used for gameplay timing. */
   timeMs: number;
+  /** Undefined outside the opening; normalized descent after the hold. */
+  introProgress?: number;
   recorder: RecorderState;
   playerStrokeMs: number;
   /** Latest beatmap onset at the current song clock, regardless of judgement. */

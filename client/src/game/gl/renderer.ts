@@ -6,7 +6,7 @@ import { CassetteRecorder } from './recorder';
 import { Color, DepthTexture, DirectionalLight, Mesh, NearestFilter, NoToneMapping, OrthographicCamera, PCFSoftShadowMap, PlaneGeometry, Scene, ShaderMaterial, SpotLight, UnsignedIntType, Vector3, WebGLRenderer, WebGLRenderTarget, } from 'three';
 import { TABLE_HALF_L, TABLE_HALF_W, TABLE_Z } from '../pixel/courtyard';
 import { LOW_H, LOW_W } from '../pixel/stage';
-import { CAMERA, VIEW_FORWARD } from '../scene/camera';
+import { CAMERA, VIEW_FORWARD, openingCamera } from '../scene/camera';
 import { buildCourtyard } from './geometry';
 import { Figure, PrimitiveBatch } from './figures';
 import { GPUTimer } from './timing';
@@ -80,6 +80,10 @@ export class GLBackend implements SceneBackend {
   readonly player: Figure;
   readonly stranger: Figure;
   private readonly point: Vec3 = [0, 0, 0];
+  private readonly gameplayCamera: OrthographicCamera;
+  private readonly bulb = new Vector3();
+  private readonly cameraTarget = new Vector3();
+  private opening = false;
   private lost = false;
   private readonly onLost = (event: Event) => { event.preventDefault(); this.lost = true; };
   private readonly onRestored = () => { this.timing = new GPUTimer(this.renderer.getContext() as WebGL2RenderingContext); this.lost = false; };
@@ -133,7 +137,8 @@ export class GLBackend implements SceneBackend {
     this.target = new WebGLRenderTarget(LOW_W, LOW_H, { count: 2, minFilter: NearestFilter, magFilter: NearestFilter, depthBuffer: true });
     this.target.depthTexture = new DepthTexture(LOW_W, LOW_H, UnsignedIntType);
     this.camera.updateMatrixWorld(true);
-    const bulb = new Vector3(1.95, .35, 3.275).project(this.camera);
+    this.gameplayCamera = this.camera.clone();
+    const bulb = this.bulb.set(1.95, .35, 3.275).project(this.camera);
     bulb.set((bulb.x*.5+.5)*LOW_W, (bulb.y*.5+.5)*LOW_H, bulb.z*.5+.5);
     const material = new ShaderMaterial({
       uniforms: { colorMap: { value: this.target.textures[0] }, surfaceMap: { value: this.target.textures[1] }, depthMap: { value: this.target.depthTexture }, lampScreen: { value: bulb }, lampLevel: lampUniform, cameraWorld: { value: this.camera.matrixWorld }, inverseProjection: { value: this.camera.projectionMatrixInverse } },
@@ -145,10 +150,33 @@ export class GLBackend implements SceneBackend {
   get available() { return !this.lost && !this.renderer.getContext().isContextLost(); }
   render(frame: SceneFrame) {
     if (PREMIUM_LOOK) updateGroundContacts(frame);
+    const cameraChanged = frame.introProgress !== undefined || this.opening;
+    if (frame.introProgress !== undefined) {
+      const view = openingCamera(frame.introProgress);
+      const halfW = LOW_W / 2 / view.scale, halfH = LOW_H / 2 / view.scale;
+      const ox = (view.offsetX ?? 0) / view.scale, oy = (view.offsetY ?? 0) / view.scale;
+      this.camera.left = -halfW - ox; this.camera.right = halfW - ox;
+      this.camera.top = halfH + oy; this.camera.bottom = -halfH + oy;
+      this.camera.updateProjectionMatrix();
+      const cp = Math.cos(view.pitch);
+      this.camera.position.set(view.target[0] - Math.sin(view.yaw) * cp * distance,
+        view.target[1] - Math.cos(view.yaw) * cp * distance, view.target[2] + Math.sin(view.pitch) * distance);
+      this.camera.lookAt(this.cameraTarget.set(...view.target));
+      this.opening = true;
+    } else if (this.opening) {
+      this.camera.copy(this.gameplayCamera);
+      this.opening = false;
+    }
+    if (cameraChanged) {
+      // Reuse the uniform vector: the halo follows the bulb during the tilt.
+      this.camera.updateMatrixWorld(true);
+      this.bulb.set(1.95, .35, 3.275).project(this.camera);
+      this.bulb.set((this.bulb.x * .5 + .5) * LOW_W, (this.bulb.y * .5 + .5) * LOW_H, this.bulb.z * .5 + .5);
+    }
     lampUniform.value = lampLevel(frame.timeMs);
     this.recorder.update(frame.recorder);
     this.musicNotes.update(frame);
-    this.snow.update(frame.timeMs);
+    this.snow.update(frame.timeMs, frame.introProgress);
     this.breath.update(frame);
     this.footprints.update(frame);
     this.paddles.begin();

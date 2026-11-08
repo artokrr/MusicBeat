@@ -14,6 +14,7 @@ export function seed(index: number) {
  * one clock uniform. Real depth tests hide it behind walls, bodies and props. */
 export class WorldSnow {
   readonly mesh: Points<BufferGeometry, ShaderMaterial>;
+  private readonly opening = { value: 0 };
   private readonly time = { value: 0 };
   constructor(scene: Scene) {
     const count = 360, positions = new Float32Array(count * 3), motion = new Float32Array(count * 3);
@@ -27,14 +28,20 @@ export class WorldSnow {
     const material = new ShaderMaterial({
       glslVersion: GLSL3,
       defines: PREMIUM_LOOK ? { PREMIUM_LOOK: 1 } : {},
-      uniforms: { time: this.time, lampLevel: lampUniform },
+      uniforms: { time: this.time, opening: this.opening, lampLevel: lampUniform },
       vertexShader: /* glsl */ `
         uniform float time;
+        uniform float opening;
         attribute vec3 motion;
         varying vec3 world;
         void main() {
           world=vec3(mod(position.x-time*.045+sin(time*.65+motion.y)*.16,12.)-6.,
             mod(position.y+sin(time*.4+motion.y)*.08,12.)-5., mod(position.z-time*motion.x,7.));
+          // Expand only for the opening; keep the original particle math at zero.
+          if(opening>0.) {
+            world.x=world.x*(1.+opening)+4.*opening;
+            world.z=world.z*(1.+opening*1.5);
+          }
           gl_Position=projectionMatrix*modelViewMatrix*vec4(world,1.);
           gl_PointSize=motion.z;
         }
@@ -68,6 +75,10 @@ export class WorldSnow {
     this.mesh.renderOrder = 2;
     scene.add(this.mesh);
   }
-  update(timeMs: number) { this.time.value = timeMs / 1000; }
+  update(timeMs: number, progress?: number) {
+    this.time.value = timeMs / 1000;
+    const t = progress ?? 1;
+    this.opening.value = 1 - t * t * t * (t * (t * 6 - 15) + 10);
+  }
   dispose() { this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
 }

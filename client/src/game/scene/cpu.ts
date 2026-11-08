@@ -1,4 +1,5 @@
 import { PREMIUM_LOOK } from './look';
+import { CPUOpening } from '../pixel/opening';
 import { CPURecorderNotes } from '../pixel/recorder-notes';
 import { CPURecorder } from '../pixel/recorder';
 import { createCourtyard, paintCourtyard, TABLE_HALF_L, TABLE_HALF_W, TABLE_Z } from '../pixel/courtyard';
@@ -9,6 +10,7 @@ import type { ShadowSink } from '../pixel/figures';
 import type { SceneBackend, SceneFrame } from './types';
 export class CPUBackend implements SceneBackend {
   readonly kind = 'cpu' as const;
+  private readonly opening = new CPUOpening();
   private readonly musicNotes = new CPURecorderNotes();
   private readonly recorder = new CPURecorder();
   private readonly renderer = createCourtyard();
@@ -68,6 +70,7 @@ export class CPUBackend implements SceneBackend {
     R.edges();
     this.musicNotes.draw(R, frame);
     this.ctx.putImageData(R.image, 0, 0);
+    if (frame.introProgress !== undefined) this.opening.draw(this.ctx, frame.introProgress);
     return this.canvas;
   }
   private contacts(body: SceneFrame['player']) {

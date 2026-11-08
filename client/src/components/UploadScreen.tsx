@@ -6,6 +6,7 @@ import { sfx } from '../audio/sfx';
 import { insertCassette, recorder } from '../game/anim/recorder';
 import { at, u } from '../game/pixel/layout';
 import PxText from '../game/pixel/PxText';
+import { shouldPlayOpening } from '../game/scene/intro';
 import { LOW_W } from '../game/pixel/stage';
 import { useGameStore } from '../store/gameStore';
 import SceneBackdrop from './SceneBackdrop';
@@ -13,6 +14,7 @@ import SceneBackdrop from './SceneBackdrop';
 
 
 export default function UploadScreen() {
+  const [opening] = useState(shouldPlayOpening);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const accepted = useRef(false);
   const [dragOver, setDragOver] = useState(false);
@@ -69,7 +71,7 @@ export default function UploadScreen() {
       }}
       onDrop={handleDrop}
     >
-      <SceneBackdrop dim={dragOver ? 0.25 : 0.45}>
+      <SceneBackdrop opening={opening} dim={dragOver ? 0.25 : 0.45}>
         <div style={at(0, 48, styles.titleBlock)}>
           <h1 style={styles.title}>
             <PxText text="ping pong" scale={2} />
