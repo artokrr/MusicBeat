@@ -1,7 +1,7 @@
 /** Presentation only. One lifetime across keyed Upload/Loading/Game screens.
  * All output storage is borrowed; sampling never allocates or reads a clock. */
-export const RECORDER_X = 2;
-export const RECORDER_Y = -1.6;
+export const RECORDER_X = 2.35;
+export const RECORDER_Y = -1.85;
 export const INSERT_MS = 1450;
 export const recorder = {
   startedMs: -Infinity, seatedAtMs: -Infinity, inserting: false, loaded: false,
@@ -43,18 +43,18 @@ export function sampleRecorder(nowMs: number) {
   const ms = nowMs - recorder.startedMs;
   const t = ease((ms - 120) / 1030);
   recorder.door = ease(ms / 230) * (1 - ease((ms - 1180) / 270));
-  recorder.tapeX = -.35 + (RECORDER_X + .08 + .35) * t;
-  recorder.tapeY = -2.1 + (RECORDER_Y - .068 + 2.1) * t;
-  recorder.tapeZ = 2.8 + (.125 - 2.8) * t + .55 * Math.sin(Math.PI * t);
+  recorder.tapeX = -.35 + (RECORDER_X + .12 + .35) * t;
+  recorder.tapeY = -2.1 + (RECORDER_Y - .102 + 2.1) * t;
+  recorder.tapeZ = 2.8 + (.1875 - 2.8) * t + .55 * Math.sin(Math.PI * t);
   recorder.tapeScale = 1 + 6.5 * (1 - t) ** 1.5;
   recorder.tapeTilt = -.65 * (1 - t);
   recorder.tapeRoll = .22 * Math.sin(t * Math.PI * 2) * (1 - t);
   recorder.tapeYaw = -.18 * (1 - t);
   if (replacing) {
     const e = ease((ms - 100) / 370);
-    recorder.oldX = RECORDER_X + .08 - .29 * e;
-    recorder.oldY = RECORDER_Y - .068 - .25 * e;
-    recorder.oldZ = .125 + .14 * Math.sin(e * Math.PI) - .108 * e;
+    recorder.oldX = RECORDER_X + .12 - .29 * e;
+    recorder.oldY = RECORDER_Y - .102 - .25 * e;
+    recorder.oldZ = .1875 + .14 * Math.sin(e * Math.PI) - .162 * e;
     recorder.oldTilt = -e * Math.PI / 2;
   }
   if (ms >= INSERT_MS) {

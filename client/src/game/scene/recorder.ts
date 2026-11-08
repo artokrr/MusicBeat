@@ -54,7 +54,7 @@ export class RecorderBoxes {
       m[at + 2] = -s * shape[offset + 3];
       m[at + 8] = s * shape[offset + 5];
       m[at + 10] = c * shape[offset + 5];
-      m[at + 12] = this.baseX + shape[offset] * c + shape[offset + 2] * s + (group === 3 ? -.027 : .027);
+      m[at + 12] = this.baseX + shape[offset] * c + shape[offset + 2] * s + (group === 3 ? -.0405 : .0405);
       m[at + 14] = this.baseZ - shape[offset] * s + shape[offset + 2] * c;
     }
   }
@@ -73,8 +73,8 @@ export class RecorderBoxes {
       let cx = shape[offset], cy = shape[offset + 1], cz = shape[offset + 2], spin = 0;
       const tape = group === 2 || group === 3 || group === 4 || old;
       this.visible[i] = !tape || (old ? s.oldVisible : s.loaded || s.inserting) ? 1 : 0;
-      if (group === 1) { x += .08; y -= .061; z = .063; tilt = s.door * 1.05; }
-      else if (group === 5) z = -s.key * .013;
+      if (group === 1) { x += .12; y -= .0915; z = .0945; tilt = s.door * 1.05; }
+      else if (group === 5) z = -s.key * .0195;
       else if (tape) {
         x = old ? s.oldX : s.tapeX; y = old ? s.oldY : s.tapeY; z = old ? s.oldZ : s.tapeZ;
         tilt = old ? s.oldTilt : s.tapeTilt; roll = old ? 0 : s.tapeRoll; yaw = old ? -.25 : s.tapeYaw;
@@ -83,7 +83,7 @@ export class RecorderBoxes {
           spin = old ? 0 : s.reel * (group === 3 ? 1 : .83);
           const rx = cx * Math.cos(spin) + cz * Math.sin(spin);
           cz = -cx * Math.sin(spin) + cz * Math.cos(spin);
-          cx = rx + (group === 3 || group === 7 ? -.027 : .027);
+          cx = rx + (group === 3 || group === 7 ? -.0405 : .0405);
         }
       }
       // Rz * Ry * Rx: a small tumble, with the front of the tape facing camera.
