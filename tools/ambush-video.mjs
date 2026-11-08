@@ -2,16 +2,16 @@
 // bot playing perfectly), from the tape seating through the 3-2-1 countdown and
 // PLAY to a few seconds of play. Chrome is muted; audio is captured in the page.
 //
-//   node tools/ambush-video.mjs [--ambush] [--vite 3200] [--cdp 9505] [--song path] [--out tools/out/ambush-shagi.mp4] [--after 5]
+//   node tools/ambush-video.mjs [--classic] [--vite 3200] [--cdp 9505] [--song path] [--out tools/out/ambush-shagi.mp4] [--after 5]
 //
-// --ambush opens the game with ?ambush (the stranger serves during the countdown).
+// The default start is the ambush (the stranger serves during the countdown); --classic opens ?classic.
 // Writes the 3x nearest-neighbour 60 fps video and <out>.json (page events, countdown ticks, presses).
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const arg = (name, fallback) => { const i = process.argv.indexOf('--' + name); return i > 0 ? process.argv[i + 1] : fallback; };
-const ambush = process.argv.includes('--ambush');
+const ambush = !process.argv.includes('--classic');
 const vite = Number(arg('vite', 3200)), cdp = Number(arg('cdp', 9505)), after = Number(arg('after', 5));
 const song = arg('song', '/Users/artem/Downloads/Буерак - Шаги.mp3');
 const outFile = resolve(arg('out', ambush ? 'tools/out/ambush-shagi.mp4' : 'tools/out/ambush-off-shagi.mp4'));
@@ -73,7 +73,7 @@ try {
       window.__capture.audioStart=Date.now()/1000;rec.start();
     };
   ` });
-  await send('Page.navigate', { url: `http://localhost:${vite}/${ambush ? '?ambush' : ''}` });
+  await send('Page.navigate', { url: `http://localhost:${vite}/${ambush ? '' : '?classic'}` });
   await sleep(2800);
   await evaluate(`(async()=>{
     const src=async p=>(await fetch(p)).text(),find=(text,re)=>text.match(re)[1];

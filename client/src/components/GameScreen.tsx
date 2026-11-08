@@ -16,7 +16,7 @@ import PxText from '../game/pixel/PxText';
 import type { FailReason, RunOutcome } from '../types/game';
 
 const FAIL_AUDIO_DURATION_MS = 1200;
-/** ?ambush: the song clock runs through the countdown, from -3 s to 0 at PLAY. */
+/** By default (not ?classic) the song clock runs through the countdown, from -3 s to 0 at PLAY. */
 const AMBUSH = isAmbush();
 
 export default function GameScreen() {

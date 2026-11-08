@@ -1,6 +1,6 @@
 // Browser-only keyboard bot, injected with tools/shot.mjs --eval. Never changes score/timing.
 // It presses on the game's own song clock (window.__songClock, dev builds), which in
-// ?ambush mode already runs during the 3-2-1 countdown, so countdown balls get hit too.
+// The default (ambush) start already runs during the 3-2-1 countdown, so countdown balls get hit too.
 // Optional: window.__botEarly = { count: 1, sec: 0.09 } presses the first `count` notes
 // `sec` early instead of 12 ms late (to check judging before PLAY).
 (async()=>{
