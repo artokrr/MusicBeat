@@ -14,7 +14,7 @@ import { exposeBeatmapDebug, isBeatmapDebugEnabled } from './beatmapDebug';
 
 import type { BeatAnalysis, Beatmap, BeatmapDebugReport, BeatNote, LaneIndex, NoteType, OnsetEvent } from '../types/beatmap';
 
-/** Nothing before this, so the first ball has time to fly in. */
+/** Nothing before this, so the first ball has time to fly in after PLAY. */
 const LEAD_IN_SEC = 1.8;
 /** No two notes closer than this... */
 const MIN_GAP_SEC = 0.14;
@@ -58,7 +58,14 @@ interface Placed {
   switchFrom?: LaneIndex;
 }
 
-export function generateBeatmap(input: BeatAnalysis, options: { debug?: boolean } = {}): Beatmap {
+export interface GenerateOptions {
+  debug?: boolean;
+  /** No note before this many seconds. 0 for an ambush, whose first ball is served during the countdown. */
+  leadInSec?: number;
+}
+
+export function generateBeatmap(input: BeatAnalysis, options: GenerateOptions = {}): Beatmap {
+  const leadInSec = options.leadInSec ?? LEAD_IN_SEC;
   const analysis = { ...input, onsets: withLocalSalience(input.onsets) };
   const { bpm, duration } = analysis;
   const beatSec = 60 / bpm;
@@ -103,8 +110,8 @@ export function generateBeatmap(input: BeatAnalysis, options: { debug?: boolean 
       const prevRate = prevBar ? (chosenPerBar[bars.indexOf(prevBar)]?.length ?? 0) / Math.max(0.25, prevBar.end - prevBar.start) : 0;
       chosen = chooseSlots(bar, beatSec, dropBoost ? prevRate * 1.3 : 0);
     }
-    cutByLeadIn[b] = chosen.some((s) => s.time < LEAD_IN_SEC);
-    chosen = chosen.filter((s) => s.time >= LEAD_IN_SEC && fitsSpacing(allChosen, s.time));
+    cutByLeadIn[b] = chosen.some((s) => s.time < leadInSec);
+    chosen = chosen.filter((s) => s.time >= leadInSec && fitsSpacing(allChosen, s.time));
     for (const s of chosen) insertSorted(allChosen, s.time);
     chosenPerBar[b] = chosen.sort((x, y) => x.time - y.time);
   }

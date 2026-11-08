@@ -19,6 +19,7 @@ interface GameProps {
   beatmap: Beatmap;
   /** Read the audio clock directly, without sending every tick through React. */
   getCurrentTime: () => number;
+  /** Presses count: the song is playing, or an ambush countdown is serving. */
   isPlaying: boolean;
   volume: number;
   /** Sound cues at the exact moment things happen (see audio/sfx.ts). */
@@ -726,6 +727,7 @@ export default function Game({ beatmap, getCurrentTime, isPlaying, volume, onSou
           nowMs,
         },
         countdown: overlay.countdown,
+        countdownServe: countdownServe(beatmap, approachTime, currentTime, overlay.countdown),
         fade: overlay.fadeStartMs === null ? 0 : Math.min(1, (nowMs - overlay.fadeStartMs) / 1100),
       });
       store.clearOldFeedbacks();
@@ -741,6 +743,17 @@ export default function Game({ beatmap, getCurrentTime, isPlaying, volume, onSou
   }, [getCurrentTime, beatmap, isPlaying, getGameplaySettings, recordHit, addPoints, addHitFeedback, onSound]);
 
   return <PixelStage ref={canvasRef}>{children}</PixelStage>;
+}
+
+/**
+ * When the first ball leaves the stranger's hand before the song starts (an
+ * ambush map), the countdown's dark lifts over the half second before that
+ * serve, as he reaches for the ball. Otherwise undefined: the usual countdown.
+ */
+function countdownServe(beatmap: Beatmap, approachTime: number, songTime: number, countdown: number | null) {
+  const first = beatmap.notes[0];
+  if (countdown === null || !first || first.time - approachTime >= 0) return undefined;
+  return { dim: (first.time - approachTime - songTime) / 0.5 };
 }
 
 function getPhantomBallAlpha(timeSinceMiss: number): number {

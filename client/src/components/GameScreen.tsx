@@ -6,6 +6,7 @@ import { DIFFICULTY_PRESETS } from '../types/game';
 import Game from '../game/Game';
 import { cancelRewind, playRecorder, recorder, rewindRecorder } from '../game/anim/recorder';
 import { cassette } from '../audio/cassetteSfx';
+import { COUNTDOWN_SEC, isAmbush } from '../game/ambush';
 import { sfx } from '../audio/sfx';
 
 import type { GameSoundEvent } from '../game/Game';
@@ -15,6 +16,8 @@ import PxText from '../game/pixel/PxText';
 import type { FailReason, RunOutcome } from '../types/game';
 
 const FAIL_AUDIO_DURATION_MS = 1200;
+/** ?ambush: the song clock runs through the countdown, from -3 s to 0 at PLAY. */
+const AMBUSH = isAmbush();
 
 export default function GameScreen() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -22,8 +25,10 @@ export default function GameScreen() {
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const startTimeRef = useRef<number>(0);
-  const stoppedTimeRef = useRef(0);
+  const stoppedTimeRef = useRef(AMBUSH ? -COUNTDOWN_SEC : 0);
   const clockRunningRef = useRef(false);
+  /** performance.now() when "3" showed, while an ambush countdown runs; null otherwise. */
+  const countdownStartMsRef = useRef<number | null>(null);
   const lastDrainTimeRef = useRef<number>(0);
   const failTimeoutRef = useRef<number | null>(null);
   const hasFinalizedRunRef = useRef(false);
@@ -58,7 +63,12 @@ export default function GameScreen() {
   const gameplaySettings = useMemo(() => DIFFICULTY_PRESETS[difficulty], [difficulty]);
   const getCurrentTime = useCallback(() => {
     const context = audioContextRef.current;
-    return context && clockRunningRef.current ? context.currentTime - startTimeRef.current : stoppedTimeRef.current;
+    if (context && clockRunningRef.current) return context.currentTime - startTimeRef.current;
+    // An ambush counts up to 0 and holds there until the song really starts:
+    // the countdown's timer can fire a little late, the clock never runs ahead.
+    const countdownStartMs = countdownStartMsRef.current;
+    if (countdownStartMs !== null) return Math.min(0, (performance.now() - countdownStartMs) / 1000 - COUNTDOWN_SEC);
+    return stoppedTimeRef.current;
   }, []);
 
   const clearFailTimeout = useCallback(() => {
@@ -212,6 +222,7 @@ export default function GameScreen() {
     startTimeRef.current = audioContext.currentTime;
     stoppedTimeRef.current = 0;
     clockRunningRef.current = true;
+    countdownStartMsRef.current = null;
     lastDrainTimeRef.current = 0;
 
     playRecorder(true, performance.now());
@@ -247,6 +258,11 @@ export default function GameScreen() {
     // Count down outside the state updater: updaters run during render, and
     // starting the game from one would update the store mid-render.
     let remaining = countdownRef.current;
+    // A re-run (StrictMode, a volume change) restarts the timer but keeps the
+    // clock's origin, so the clock never steps back; it waits at 0 for PLAY instead.
+    if (AMBUSH && countdownStartMsRef.current === null) {
+      countdownStartMsRef.current = performance.now() - (COUNTDOWN_SEC - remaining) * 1000;
+    }
     const countdownInterval = setInterval(() => {
       remaining -= 1;
       if (remaining <= 0) {
@@ -298,6 +314,14 @@ export default function GameScreen() {
     checkFailure();
     return () => { window.clearInterval(interval); unsubscribe(); };
   }, [phase, beatmap, getCurrentTime, applyPassiveDrain, checkFailure]);
+
+  // Test tools (tools/gl-bot.js) press keys on the same clock the game judges by.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const page = window as Window & { __songClock?: () => number };
+    page.__songClock = getCurrentTime;
+    return () => { if (page.__songClock === getCurrentTime) delete page.__songClock; };
+  }, [getCurrentTime]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -403,7 +427,7 @@ export default function GameScreen() {
       <Game
         beatmap={beatmap}
         getCurrentTime={getCurrentTime}
-        isPlaying={isPlaying && phase === 'playing'}
+        isPlaying={phase === 'playing' ? isPlaying : AMBUSH && phase === 'countdown'}
         volume={volume}
         onSound={handleSound}
         countdown={phase === 'countdown' ? countdown : null}
