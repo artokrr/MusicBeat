@@ -21,6 +21,7 @@ import { drawHud, type HudState } from './hud';
 import { LOW_H, LOW_W, PAL, WORLD_SCALE } from './stage';
 /** The subset of Game.tsx's ActiveNote the renderer reads. */
 export interface NoteView {
+  smash?: boolean;
   x: number;
   y: number;
   time: number;

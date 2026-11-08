@@ -72,6 +72,7 @@ export const RETURN_FADE_SECONDS = 1.25;
 export const BASKET: Readonly<Vec3> = [0.78, 1.95, 0.98];
 
 export interface ReturnFlight {
+  smash?: boolean;
   id: number;
   startAt: number;
   endAt: number;
@@ -83,13 +84,21 @@ export interface ReturnFlight {
 
 /** One bounce on the far half, arriving at precisely the next incoming origin. */
 export function returningBall(flight: ReturnFlight, time: number, out: Vec3): Vec3 {
-  const p = Math.max(0, Math.min(1, (time - flight.startAt) / (flight.endAt - flight.startAt)));
+  const u = Math.max(0, Math.min(1, (time - flight.startAt) / (flight.endAt - flight.startAt)));
+  // Faster off the bat, with exactly the same rally arrival deadline.
+  const p = flight.smash ? u + 0.30 * u * (1 - u) : u;
   out[0] = flight.from[0] + (flight.endX - flight.from[0]) * p;
   out[1] = flight.from[1] + (1.5 - flight.from[1]) * p;
   // Correct both endpoints without changing the table bounce.
   out[2] = BALL_ON_TABLE_Z + flightHeight(p);
   if (p < BOUNCE_AT) out[2] += (flight.from[2] - (BALL_ON_TABLE_Z + flightHeight(0))) * (1 - p / BOUNCE_AT) ** 2;
   else out[2] -= 0.02 * ((p - BOUNCE_AT) / (1 - BOUNCE_AT)) ** 2;
+  if (flight.smash) {
+    const base = p < BOUNCE_AT
+      ? flight.from[2] + (BALL_ON_TABLE_Z - flight.from[2]) * p / BOUNCE_AT
+      : BALL_ON_TABLE_Z + (1.035 - BALL_ON_TABLE_Z) * (p - BOUNCE_AT) / (1 - BOUNCE_AT);
+    out[2] = base + (out[2] - base) * 0.65;
+  }
   if (time > flight.endAt && !Number.isFinite(flight.rallyTime)) {
     // Clear the stranger's left side, fall to the snow, bounce once, then roll.
     // The far-half bounce already happened above; there is no mid-air cull.

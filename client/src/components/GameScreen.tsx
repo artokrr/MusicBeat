@@ -157,7 +157,7 @@ export default function GameScreen() {
   const handleSound = useCallback((event: GameSoundEvent) => {
     switch (event.kind) {
       case 'hit':
-        sfx.hit(event.result, event.lane, event.noteType);
+        sfx.hit(event.result, event.lane, event.noteType, event.smash);
         break;
       case 'miss':
         sfx.miss(event.lane);

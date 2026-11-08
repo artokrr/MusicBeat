@@ -22,6 +22,7 @@ function makePose(): JointPose {
 
 class Foot {
   x = 0; from = 0; goal = 0; phase = 1; lift = 0;
+  liftHeight = 0.055;
   /** Forward (+) or back (-) of the stance line, for lunges and step-backs. */
   y = 0; fromY = 0; goalY = 0;
   step(x: number, y = this.goalY) { this.from = this.x; this.goal = x; this.fromY = this.y; this.goalY = y; this.phase = 0; }
@@ -32,7 +33,7 @@ class Foot {
     const ease = t * t * t * (10 + t * (-15 + 6 * t));
     this.x = this.from + (this.goal - this.from) * ease;
     this.y = this.fromY + (this.goalY - this.fromY) * ease;
-    this.lift = 0.055 * Math.sin(Math.PI * t) ** 2;
+    this.lift = this.liftHeight * Math.sin(Math.PI * t) ** 2;
   }
 }
 
@@ -72,12 +73,15 @@ class Body {
   struck = false;
   contactAt = -Infinity;
   strokeSide = 1;
+  strokeKind: 'drive' | 'slice' | 'smash' = 'drive';
+  readonly face = new Spring();
   held = false;
   tossUntil = -Infinity;
   lastBodyY: number;
   ambientTime = 0;
   readyX = 0; readyY = 0; readyZ = 1.08;
   constructor(readonly facing: 1 | -1, readonly feetY: number, x: number) {
+    if (facing === 1) this.left.liftHeight = this.right.liftHeight = 0.025;
     this.x = new Spring(x); this.lastBodyY = feetY;
     this.eventY = this.hitY;
     this.left.x = this.left.from = this.left.goal = x - facing * 0.23;
@@ -87,7 +91,8 @@ class Body {
     this.balance.reset(x - facing * 0.28, feetY + facing * 0.36, 1.14);
   }
   get hitY() { return this.facing === 1 ? CONTACT.playerY : CONTACT.strangerY; }
-  prepare(time: number, at: number, x: number, z: number, id: number, toss = false) {
+  prepare(time: number, at: number, x: number, z: number, id: number, toss = false, kind: 'drive' | 'slice' | 'smash' = 'drive') {
+    this.strokeKind = kind;
     this.eventTime = id; this.contactAt = at; this.eventX = x; this.eventY = this.hitY; this.eventZ = z;
     this.timing = 0; this.struck = false; this.leanGoal = 0;
     this.settleFeet();
@@ -98,17 +103,18 @@ class Body {
     // An outside-lane ball gets a direct, continuous preparation while the
     // lower body shuffles into range, rather than winding up at an empty lane.
     const onLane = Math.abs(x - (this.x.value + this.facing * 0.3)) < 0.20;
-    if (lead > 0.19 && (this.facing === -1 || onLane)) {
+    if (lead > 0.19 && (this.facing === -1 || onLane || kind !== 'drive')) {
       this.mode = 'wind';
       this.hand.plan(time, lead - 0.13, x + this.facing * this.strokeSide * 0.1,
-        this.hitY - this.facing * 0.26, z - 0.05);
+        this.hitY - this.facing * (this.facing === -1 ? 0.26 : 0.15),
+        z + (this.facing === -1 ? -0.05 : kind === 'smash' ? 0.42 : kind === 'slice' ? 0.13 : -0.10));
     } else this.contact(time);
   }
   contact(time: number) {
     this.mode = 'contact';
     const soft = this.eventZ === CONTACT.holdZ;
     this.hand.plan(time, this.contactAt - time, this.eventX, this.eventY, this.eventZ,
-      soft ? 0 : -this.facing * this.strokeSide * 0.24, soft ? 0 : this.facing * 0.85, soft ? 0 : 0.12);
+      soft ? 0 : -this.facing * this.strokeSide * 0.24, soft ? 0 : this.facing * 0.85, soft ? 0 : this.facing === -1 ? 0.12 : this.strokeKind === 'smash' ? -0.9 : 0.35);
   }
   /**
    * Meet a pressed ball where it really is at `at`. On the beat this is the
@@ -123,24 +129,24 @@ class Body {
     if (this.facing === 1) {
       // Queue the fore/aft step. Never restart an airborne foot or lift the
       // support foot while the lateral shuffle is still landing.
-      this.stanceY = timing < 0 ? -0.34 * timing : -0.30 * timing;
+      this.stanceY = timing < 0 ? -0.18 * timing : -0.16 * timing;
     } else if (timing !== 0) {
       this.left.step(this.left.goal, this.facing * (timing < 0 ? -0.24 * timing : -0.2 * timing));
     }
     this.eventX = x; this.eventY = y; this.eventZ = z;
     const f = this.facing, early = Math.max(0, -timing), late = Math.max(0, timing);
     this.hand.plan(time, at - time, x, y, z,
-      -f * this.strokeSide * 0.24 * (1 - 0.5 * (early + late)), f * (0.85 - 0.45 * early - 0.4 * late), 0.12 + 0.55 * late);
+      -f * this.strokeSide * 0.24 * (1 - 0.5 * (early + late)), f * (0.85 - 0.45 * early - 0.4 * late), (this.strokeKind === 'smash' ? -0.9 : 0.35) + 0.40 * late);
     this.contactAt = this.hand.end;
   }
   follow(time: number, push = false) {
     this.mode = 'follow';
     if (push && this.facing === 1) this.releaseAt = time;
     const f = this.facing, early = push ? 0 : Math.max(0, -this.timing), late = push ? 0 : Math.max(0, this.timing);
-    const reach = push ? 0.025 : 0.09 * (1 - 0.6 * early - 0.3 * late);
+    const reach = push ? 0.025 : this.strokeKind === 'smash' ? 0.13 : (f === -1 ? 0.09 : 0.055) * (1 - 0.6 * early - 0.3 * late);
     const forward = push ? 0.09 : 0.095 * (1 - 0.5 * early - 0.45 * late);
-    const lift = push ? 0.02 : 0.065 - 0.03 * early + 0.11 * late;
-    this.hand.plan(time, (push ? 0.12 : 0.095) + 0.03 * (early + late), this.eventX - f * this.strokeSide * reach,
+    const lift = push ? -0.045 : this.strokeKind === 'smash' ? -0.15 : (f === -1 ? 0.065 : 0.09) - 0.03 * early + 0.11 * late;
+    this.hand.plan(time, (f === -1 ? (push ? 0.12 : 0.095) : push ? 0.18 : 0.15) + 0.03 * (early + late), this.eventX - f * this.strokeSide * reach,
       this.eventY + f * forward, this.eventZ + lift);
   }
   /** The beat arrived without a press: check the swing and let the ball come on. */
@@ -158,7 +164,7 @@ class Body {
     // Carry the loaded stance through recovery; a new ball can still interrupt
     // it via prepare(). Returning the foot at follow-through hid the whole step.
     if (this.facing === -1 || this.timing === 0) this.settleFeet();
-    this.hand.plan(time, 0.28 + 0.1 * Math.abs(this.timing), this.readyX, this.readyY, this.readyZ);
+    this.hand.plan(time, (this.facing === -1 ? 0.28 : 0.34) + 0.1 * Math.abs(this.timing), this.readyX, this.readyY, this.readyZ);
     this.timing = 0;
   }
   advance(time: number) {
@@ -195,12 +201,12 @@ class Body {
   render(time: number, dt: number, targetX: number, gazeX: number, gazeZ: number, idle: boolean) {
     const f = this.facing, npc = f === -1, j = this.pose.joints;
     this.ambientTime += dt;
-    const breath = Math.sin(this.ambientTime * (npc ? 1.15 : 1.65)) * (npc ? 0.003 : idle ? 0.012 : 0.006);
+    const breath = Math.sin(this.ambientTime * (npc ? 1.15 : 1.65)) * (npc ? 0.003 : idle ? 0.004 : 0.002);
     const hold = npc ? 0 : this.holding.update(this.mode === 'hold' ? 1 : 0, 12, dt);
     const release = npc ? 0 : Math.sin(Math.PI * clamp((time - this.releaseAt) / 0.3, 0, 1)) ** 2;
     const rest = npc ? 0 : this.idleWeight.update(idle ? 1 : 0, 5, dt);
     const sway = rest * Math.sin(this.ambientTime * 0.72);
-    this.x.update(targetX + (idle ? Math.sin(this.ambientTime * 0.47) * (npc ? 0.002 : 0.012) : 0), npc ? 11 : 14, dt);
+    this.x.update(targetX + (idle ? Math.sin(this.ambientTime * 0.47) * (npc ? 0.002 : 0.012) : 0), npc ? 11 : 10, dt);
     const vx = this.x.velocity;
     const stroke = this.mode === 'contact' || this.mode === 'follow';
     const strokeTiming = stroke ? this.timing : 0;
@@ -208,9 +214,9 @@ class Body {
     const strain = this.strain.update(this.leanGoal * (npc && this.mode === 'recover' ? 0.5 : 1), 10, dt);
     const reaching = Math.max(0, -strain), jammed = Math.max(0, strain);
     const turn = this.mode === 'wind' ? -0.25 : stroke ? 0.23 * (1 - 0.45 * jammed) : this.mode === 'hold' ? 0.08 : this.mode === 'wait' ? -0.06 : 0;
-    this.twist.update(turn * this.strokeSide + clamp(-vx * f * 0.06, -0.1, 0.1), 20, dt);
+    this.twist.update(turn * this.strokeSide * (npc ? 1 : 0.65) + clamp(-vx * f * 0.06, -0.1, 0.1), 20, dt);
     this.load.update(npc ? (stroke ? 0.018 : this.mode === 'wind' ? -0.012 : 0)
-      : (stroke ? 0.018 : this.mode === 'wind' ? -0.012 : 0) + hold * 0.045 - release * 0.04, 16, dt);
+      : (stroke ? 0.006 : this.mode === 'wind' ? -0.005 : 0) + hold * 0.012 - release * 0.008, 16, dt);
     // A stroke at the edge of the window ("ok") also costs a little balance.
     this.slump.update(this.mode === 'miss' ? 1 : Math.max(0, Math.abs(strokeTiming) - 0.7), 9, dt);
     this.readyX = this.x.value + f * 0.34;
@@ -230,7 +236,7 @@ class Body {
     // hips beyond its support. Ordinary shuffles keep their original cadence.
     const hurry = npc ? 0 : smooth((Math.max(Math.abs(this.x.value - 0.09 - this.left.x),
       Math.abs(this.x.value + 0.09 - this.right.x)) - 0.26) / 0.20);
-    const stepDuration = npc ? 0.19 : 0.155 - hurry * 0.08;
+    const stepDuration = npc ? 0.19 : 0.23 - hurry * 0.04;
     this.left.update(dt, stepDuration);
     this.right.update(dt, !npc && this.right.from === this.right.goal && this.right.fromY !== this.right.goalY ? 0.22 : stepDuration);
     if (this.left.phase === 1 && this.right.phase === 1) {
@@ -248,9 +254,9 @@ class Body {
       }
     }
     let pelvisZ = (npc ? 0.87 : 0.79) + breath - this.load.value - this.slump.value * 0.025
-      - 0.05 * reaching - (npc ? 0.02 : 0.065) * jammed + rest * 0.018 - hold * 0.09 + release * 0.085;
-    const pelvisY = this.feetY + f * (0.065 + this.load.value + (npc ? 0.10 : 0.24) * reaching
-      - (npc ? 0.07 : 0.20) * jammed - hold * 0.075 + release * 0.09);
+      - 0.05 * reaching - (npc ? 0.02 : 0.065) * jammed + rest * 0.018 - hold * 0.018 + release * 0.012;
+    const pelvisY = this.feetY + f * (0.065 + this.load.value + (npc ? 0.10 : 0.16) * reaching
+      - (npc ? 0.07 : 0.13) * jammed - hold * 0.02 + release * 0.02);
     if (!npc && reaching + jammed > 0.001) {
       // A long step can coincide with a wide chase. Sink into the stance only
       // as far as needed to keep the planted trailing leg within its 86 cm reach.
@@ -293,12 +299,15 @@ class Body {
     const sy = shoulderY + ry / (distance || 1) * excess;
     const sz = shoulderZ + rz / (distance || 1) * excess;
     set(j.chest, shoulderX, sy - f * 0.035, sz - 0.1);
-    set(j.neck, shoulderX, sy + f * 0.015, sz + 0.055);
+    // The shoulder can reach without dragging the skull along with every
+    // correction of the blade. Keep the player's gaze above the stable trunk.
+    set(j.neck, npc ? shoulderX : this.x.value + reachSide * 0.35 + sway * 0.035,
+      (npc ? sy : shoulderY) + f * 0.015, (npc ? sz : shoulderZ) + 0.055);
     set(j.shoulderL, shoulderX - turnY * 0.2, sy + turnX * 0.2, sz);
     set(j.shoulderR, shoulderX + turnY * 0.2, sy - turnX * 0.2, sz);
     this.gazeX.update(gazeX, 7, dt); this.gazeZ.update(gazeZ, 7, dt);
-    const lookSide = clamp((this.gazeX.value - shoulderX) * (npc ? 0.055 : 0.10), npc ? -0.035 : -0.055, npc ? 0.035 : 0.055);
-    const lookDown = npc ? 0 : clamp(1.14 - this.gazeZ.value, -0.16, 0.5) * 0.09 + this.slump.value * 0.025;
+    const lookSide = clamp((this.gazeX.value - shoulderX) * (npc ? 0.055 : 0.035), npc ? -0.035 : -0.055, npc ? 0.035 : 0.055);
+    const lookDown = npc ? 0 : clamp(1.14 - this.gazeZ.value, -0.16, 0.5) * 0.025 + this.slump.value * 0.025;
     const tilt = npc ? Math.sin(this.ambientTime * 0.19) ** 9 * 0.018 : 0;
     set(j.head, j.neck[0] + lookSide + tilt, j.neck[1] + f * 0.035,
       j.neck[2] + 0.15 - clamp(1.1 - this.gazeZ.value, 0, 0.7) * 0.025);
@@ -315,10 +324,16 @@ class Body {
     set(this.pose.paddle.center, p[0], p[1], p[2]);
     // Project the outgoing ball direction onto the plane perpendicular to the
     // handle. This keeps a real orthonormal paddle and a forward-facing rubber.
-    const dot = f * up[1];
-    const nx = -up[0] * dot, ny = f - up[1] * dot, nz = -up[2] * dot;
+    const pitch = npc ? 0 : (this.strokeKind === 'slice' || this.eventZ === CONTACT.holdZ) ? 0.9 : -0.25;
+    const dot = f * up[1] + pitch * up[2];
+    const nx = -up[0] * dot, ny = f - up[1] * dot, nz = pitch - up[2] * dot;
     const nl = Math.hypot(nx, ny, nz) || 1;
-    set(this.pose.paddle.normal, nx / nl, ny / nl, nz / nl);
+    // Roll continuously around the handle to expose the black rubber on backhands.
+    const face = this.face.update(npc ? 0 : (this.strokeSide < 0 ? Math.PI : 0), 18, dt);
+    const c = Math.cos(face), sn = Math.sin(face);
+    set(this.pose.paddle.normal, (nx * c + (up[1] * nz - up[2] * ny) * sn) / nl,
+      (ny * c + (up[2] * nx - up[0] * nz) * sn) / nl,
+      (nz * c + (up[0] * ny - up[1] * nx) * sn) / nl);
 
     const toss = npc ? smooth((this.tossUntil - time) / 0.12) : 0;
     this.balance.sample(time);
@@ -330,9 +345,9 @@ class Body {
       // delayed response breaks the rigid "both elbows up" silhouette.
       const counterStroke = stroke || this.mode === 'recover' && time < this.contactAt + 0.26;
       const counter = this.armSwing.update(counterStroke ? this.strokeSide : this.mode === 'wind' ? -this.strokeSide * 0.45 : 0, 11, dt);
-      this.balance.plan(time, 0.18, shoulderX - (0.29 + clamp(vx * 0.04, -0.065, 0.065)) - counter * 0.18,
-        sy + 0.21 - counter * 0.16 + hold * 0.055 - rest * 0.045,
-        1.06 + counter * 0.10 + hold * 0.035 - this.slump.value * 0.10 - rest * 0.09 + sway * 0.02);
+      this.balance.plan(time, 0.18, shoulderX - (0.29 + clamp(vx * 0.04, -0.065, 0.065)) - counter * 0.05,
+        sy + 0.21 - counter * 0.045 + hold * 0.055 - rest * 0.045,
+        1.06 + counter * 0.025 + hold * 0.035 - this.slump.value * 0.10 - rest * 0.09 + sway * 0.02);
     }
     set(j.wristL, this.balance.position[0], this.balance.position[1], this.balance.position[2]);
     if (!npc) {
@@ -447,7 +462,7 @@ export function createAnimator(): Animator {
   let strikeCursor = 0;
   const ball: Vec3 = [0, 0, 0];
   const returns: ReturnFlight[] = Array.from({ length: 64 }, () => ({
-    id: -Infinity, startAt: 0, endAt: 0, rallyTime: Infinity, endX: 0, from: [0, 0, 0],
+    id: -Infinity, startAt: 0, endAt: 0, rallyTime: Infinity, endX: 0, from: [0, 0, 0], smash: false,
   }));
   let returnCursor = 0;
   function returnFor(noteTime: number) {
@@ -510,7 +525,7 @@ export function createAnimator(): Animator {
     player.advance(t);
     if (held) {
       if (player.mode !== 'hold' && player.mode !== 'contact') {
-        player.prepare(t, t + 0.065, courtX(held.x), CONTACT.holdZ, held.time);
+        player.prepare(t, t + 0.065, courtX(held.x), CONTACT.holdZ, held.time, false, 'slice');
       }
     } else if (wasHeld) { player.follow(t, true); }
     // A pressed ball: the paddle meets it where it is a moment after the press,
@@ -528,6 +543,7 @@ export function createAnimator(): Animator {
         reach = clamp(Math.hypot(ball[0] - hand[0], ball[1] - hand[1], ball[2] - hand[2]) / 7, 0.016, 0.07);
       }
       incomingBall(n, t + reach, frame.approachTime, ball);
+      player.strokeKind = n.smash ? 'smash' : 'drive';
       player.eventTime = n.time;
       player.strike(t, t + reach, ball[0], ball[1], ball[2], grade * Math.sign(late));
       const s = strikes[strikeCursor]; strikeCursor = (strikeCursor + 1) % strikes.length;
@@ -546,8 +562,20 @@ export function createAnimator(): Animator {
       }
     }
     if (next && !held && next.time - t < 0.36 && next.time !== player.eventTime
-      && (t >= player.contactAt - 0.001 || player.mode === 'ready' || player.mode === 'recover')) {
-      player.prepare(t, Math.max(t + 0.025, next.time), courtX(next.targetX), next.type === 'hold' ? CONTACT.holdZ : CONTACT.hitZ, next.time);
+      && ((t >= player.contactAt && (t >= player.contactAt + 0.06 || next.time - t < 0.22)) || player.mode === 'ready' || player.mode === 'recover')) {
+      const slice = next.type === 'hold';
+      // Anticipate the short visual contact delay too. Aiming first at the beat
+      // line, then yanking back to the running ball on every press caused a
+      // second reversal in otherwise perfect strokes. Actual strike() still
+      // determines contact; early/late inputs retain their real trajectory.
+      const at = Math.max(t + 0.025, next.time + (slice ? 0 : 0.025));
+      incomingBall(next, at, frame.approachTime, ball);
+      player.prepare(t, at, courtX(next.targetX), slice ? CONTACT.holdZ : ball[2], next.time,
+        false, ((frame.hud?.combo ?? 0) + 1) % 25 === 0 ? 'smash' : slice ? 'slice' : 'drive');
+      if (!slice) {
+        player.eventY = ball[1];
+        if (player.mode === 'contact') player.contact(t);
+      }
     }
     if (missed) {
       lastMiss = missed.missTime!;
@@ -565,7 +593,7 @@ export function createAnimator(): Animator {
       if (!n.returnPhase || returnFor(n.time)) continue;
       const strike = strikeFor(n.time);
       const r = returns[returnCursor]; returnCursor = (returnCursor + 1) % returns.length;
-      r.id = n.time;
+      r.id = n.time; r.smash = n.smash;
       r.startAt = strike?.at ?? n.returnStartedAt ?? t - n.returnProgress * 0.4;
       const nextLaunch = (n.nextTime ?? Infinity) - frame.approachTime;
       const duration = nextLaunch - r.startAt;
@@ -598,12 +626,12 @@ export function createAnimator(): Animator {
       stranger.prepare(t, Math.max(t + 0.025, event.at), event.x, event.z, event.id);
       if (event.kind === 0) stranger.feed(t, stranger.contactAt, event.x);
     }
-    let bodyX = courtX(frame.playerX) - 0.3;
+    let bodyX = courtX(frame.playerX) * 0.65 - 0.22;
     if (next && next.time - t < 0.3) {
       // Shift weight toward the approaching ball, but keep feet under the
       // player. Dense alternation becomes upper-body reach over a stable base.
       const preview = smooth((0.3 - (next.time - t)) / 0.2) * 0.65;
-      bodyX += (courtX(next.targetX) - 0.3 - bodyX) * preview;
+      bodyX += (courtX(next.targetX) * 0.65 - 0.22 - bodyX) * preview;
     }
     const flight = look ? clamp(1 - (look.time - t) / frame.approachTime, 0, 1) : 1;
     const a = flight <= 0.7 ? flight / 0.7 : (flight - 0.7) / 0.3;

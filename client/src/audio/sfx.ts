@@ -179,9 +179,9 @@ export const sfx = {
    * A return. Perfect is the full, crisp hit; good is a touch softer; ok sounds
    * muffled, like catching the ball on the edge. Switch balls are hit as smashes.
    */
-  hit(result: Exclude<HitResult, 'miss'>, lane: LaneIndex, noteType: NoteType) {
+  hit(result: Exclude<HitResult, 'miss'>, lane: LaneIndex, noteType: NoteType, smash = false) {
     const pan = LANE_PAN[lane];
-    const bank: Bank = noteType === 'switch' ? 'smash' : 'paddle';
+    const bank: Bank = smash || noteType === 'switch' ? 'smash' : 'paddle';
     if (result === 'perfect') paddleHit({ pan, gain: 1 }, bank);
     else if (result === 'good') paddleHit({ pan, gain: 0.8, lowpass: 7000 }, bank);
     else paddleHit({ pan, gain: 0.7, rate: 0.97, lowpass: 2200 }, bank);

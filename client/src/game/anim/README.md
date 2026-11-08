@@ -175,3 +175,25 @@ are made by this module.
 replacement, stop/resume, fixed buffers over 10,000 updates, and equivalence of
 128 hub poses between the seated fast path and complete transforms. Browser
 verification and recording commands are in `../gl/README.md`.
+
+## Economical player strokes (pixel-strokes)
+
+The player's lane displacement is 65% of the lane movement; slower 190–230 ms
+steps lift 2.5 cm, hold loading is about 3 cm, and the head stays over the trunk
+while the shoulder reaches. The stranger retains its existing motion constants.
+Preparation anticipates the nominal 25 ms visual contact delay; `strike()` and
+`incomingBall()` still determine the actual contact, including early/late inputs.
+
+The ball's side relative to the torso chooses forehand/backhand. The red-face
+normal rolls around the handle to expose the black face on backhands. Ordinary
+strokes rise through contact; holds cut down with an open face and stay at the
+held ball. Every 25th consecutive hit latches a presentation-only smash flag:
+42 cm overhead preparation, a downward follow-through, the existing smash sound
+bank, and a lower/faster initial return. A milestone hold uses the larger downward
+preparation but keeps its open face and held contact. Return deadlines and endpoints
+are unchanged; the lowered curve still clears the net. Switch sounds are retained.
+
+See `tools/STROKES.md` for reproducible muted recordings, measurement limits,
+contact/dense-feed/net checks, CPU fallback, benchmarks and artifact paths.
+The earlier static sheet assertions assume beat-line contacts and red-face-forward
+for every stroke; `tools/strokes-check.mjs` tests the current contact/face contract.
